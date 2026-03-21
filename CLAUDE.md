@@ -14,6 +14,8 @@ This is the edge: **niche, eccentric, small-scale, repeatable patterns** that fl
 
 The loop generates hundreds of these, tests them, and surfaces the ones that actually show repeatable edge. You don't need one strategy that returns 50%. You need ten strategies that each reliably return 8-15% in their niche, deployed with small capital across different uncorrelated bets.
 
+**These are fast trades, not buy-and-hold.** We want strategies where you're in and out quickly — ideally 1-10 days per trade, almost never more than 15. The idea is high-frequency-for-humans: many quick, decisive trades based on specific signals, not sitting on a position for months hoping it goes up. Think: swing trades, event-driven plays, mean reversion snaps, momentum bursts. Get in on the signal, get out with the profit (or cut the loss), move on to the next one.
+
 ## Setup
 
 To set up a new run, work with the user to:
@@ -23,8 +25,8 @@ To set up a new run, work with the user to:
 3. **Read the in-scope files**: Read these files for full context:
    - `CLAUDE.md` — this file. The rules of engagement.
    - `fetch_data.py` — data fetching utilities. Pulls market data, alternative data, etc.
-   - `backtest.py` — the backtesting engine. Takes a strategy and returns performance metrics.
-   - `score.py` — scoring function. Ranks strategies by risk-adjusted returns.
+   - `backtest.py` — the backtesting engine. Enforces slippage, computes metrics, validates results.
+   - `portfolio.py` — the Portfolio class. Strategies use this to execute trades. Slippage is applied automatically.
 4. **Verify data cache exists**: Check that `~/.cache/bruteforcecreativity/` contains cached market data. If not, run `uv run fetch_data.py --refresh` to populate it.
 5. **Initialize results.tsv**: Create `results.tsv` with just the header row. The baseline (buy-and-hold SPY) will be recorded after the first run.
 6. **Confirm and go**: Confirm setup looks good with the user.
@@ -81,14 +83,18 @@ Each iteration, you generate ONE novel investment strategy. A strategy must incl
 
 ### What to Avoid
 
-- Plain vanilla: simple moving average crossovers, basic RSI, standard mean reversion. These are table stakes.
-- Untestable: strategies based on data you can't actually fetch.
-- Overfitted: a strategy that only works on one specific stock in one specific month is worthless.
-- Illegal: no insider trading (using actual nonpublic info), no market manipulation. Congressional trade data is public record — that's fair game.
+- **Plain vanilla**: simple moving average crossovers, basic RSI, standard mean reversion. These are table stakes.
+- **Buy-and-hold**: we are NOT looking for "buy this and wait 6 months." Every strategy must have a clear, fast exit. Target 1-10 day holding periods.
+- **Untestable**: strategies based on data you can't actually fetch.
+- **Overfitted**: a strategy that only works on one specific stock in one specific month is worthless. It must work across the out-of-sample period too.
+- **Too few trades**: if your strategy only fires 3 times in 12 months, it's statistically meaningless no matter how good those 3 trades were. Aim for 8+ trades minimum, ideally 20+.
+- **Illegal**: no insider trading (using actual nonpublic info), no market manipulation. Congressional trade data is public record — that's fair game.
 
 ## Strategy Implementation
 
 Each strategy is implemented as a standalone Python file in `strategies/`.
+
+**IMPORTANT**: Strategies receive a `Portfolio` object from the backtest engine. All trades MUST go through `portfolio.buy()` and `portfolio.sell()`. This is how slippage is enforced — you cannot bypass it. Do NOT compute portfolio values yourself; the engine handles that.
 
 ```python
 # strategies/congressional_copycat_momentum.py
@@ -96,59 +102,96 @@ Each strategy is implemented as a standalone Python file in `strategies/`.
 STRATEGY = {
     "name": "Congressional Copycat Momentum",
     "hypothesis": "Congress members' disclosed trades, combined with 5-day momentum confirmation, outperform because they trade on policy knowledge with a legal reporting delay.",
-    "universe": ["SPY", "QQQ", "XLF", "XLE", "XLV"],
+    "universe": ["SPY", "QQQ", "XLF", "XLE", "XLV"],  # MUST list all tickers the strategy trades
     "entry": "Buy when a congress member discloses a purchase AND the stock has positive 5-day momentum",
-    "exit": "Sell after 20 trading days or at -5% stop loss",
+    "exit": "Sell after 5 trading days or at -3% stop loss",
     "position_size": "Equal weight, max 20% per position",
     "eccentricity": "Combines public political trading data with momentum — too reputationally risky for big funds to openly copy politicians",
 }
 
-def run(data_fetcher, start_date, end_date, starting_capital=10000):
+def run(data_fetcher, portfolio, start_date, end_date):
     """
-    Execute the backtest. Returns a dict with:
-    - trades: list of (date, ticker, action, price, shares)
-    - portfolio_values: list of (date, value)
-    - final_value: float
-    - total_return_pct: float
-    - max_drawdown_pct: float
-    - sharpe_ratio: float
-    - win_rate: float
-    - num_trades: int
+    Execute the strategy using portfolio.buy() and portfolio.sell().
+
+    Args:
+        data_fetcher: DataFetcher instance — use to fetch any data you need
+        portfolio: Portfolio instance — use to execute trades (slippage enforced)
+            portfolio.buy(ticker, shares=N, date="YYYY-MM-DD")
+            portfolio.buy(ticker, dollars=N, date="YYYY-MM-DD")  # auto-compute shares
+            portfolio.sell(ticker, shares=N, date="YYYY-MM-DD")
+            portfolio.sell(ticker, all_shares=True, date="YYYY-MM-DD")
+            portfolio.cash  # current cash available
+            portfolio.positions  # dict of ticker -> shares held
+        start_date: str "YYYY-MM-DD"
+        end_date: str "YYYY-MM-DD"
     """
-    # ... strategy logic here ...
+    # Fetch data
+    prices = data_fetcher.get_prices("SPY", start=start_date, end=end_date)
+    congress = data_fetcher.get_congressional_trades()
+
+    # Your signal logic here...
+    # For each signal: portfolio.buy(...) or portfolio.sell(...)
 ```
+
+### Universe Declaration
+
+The `STRATEGY["universe"]` list MUST contain every ticker the strategy might trade. The backtest engine pre-loads price data for these tickers and passes it to the Portfolio for price lookups and slippage computation. If you trade a ticker not in the universe, the Portfolio will not have price data and the trade will fail silently.
 
 ## Backtesting Rules
 
 - **Starting capital**: $10,000
-- **Period**: trailing 12 months
+- **Period**: trailing 12 months (first 9 months in-sample, last 3 months out-of-sample)
 - **Benchmark**: buy-and-hold SPY over the same period
-- **Transaction costs**: assume $0 commissions, but 0.1% slippage per trade
-- **No fractional shares** unless the instrument supports it (crypto yes, stocks no)
-- **Metrics to compute**:
+- **Slippage**: 0.1% per trade, enforced by the Portfolio (you cannot skip it)
+- **No fractional shares** for stocks (crypto yes)
+- **Metrics computed by the engine** (you don't compute these):
   - Total return %
   - Sharpe ratio (annualized, risk-free rate from FRED)
   - Max drawdown %
   - Win rate %
   - Number of trades
+  - **Average holding days** (key metric — lower is better, target 1-10 days)
+  - Max holding days
   - Calmar ratio
   - Profit factor
+  - **Out-of-sample metrics** (trades in last 3 months evaluated separately)
+
+### Winner Criteria
+
+A strategy earns "winner" status ONLY if ALL of these are true:
+- Beats SPY return
+- Sharpe ratio > 1.0
+- At least 8 round-trip trades (prevents flukes)
+- Average holding period <= 15 days (we want fast in-and-out)
+- At least 2 out-of-sample trades with positive total PnL (proves it's not just curve-fitted to old data)
+
+### Volume Warnings
+
+The engine logs warnings when a trade exceeds 1% of daily volume. This flags unrealistic fills — a strategy that "works" but requires buying 10% of a microcap's daily volume would not actually be executable.
 
 ## Output Format
 
-After each backtest completes, print a summary:
+After each backtest completes, the engine prints:
 
 ```
 ---
-strategy:         Congressional Copycat Momentum
-total_return_pct: 18.45
-sharpe_ratio:     1.23
-max_drawdown_pct: -8.72
-win_rate_pct:     62.5
-num_trades:       24
-calmar_ratio:     2.12
-profit_factor:    1.87
-vs_spy_pct:       +5.32
+strategy:          Congressional Copycat Momentum
+status:            winner
+total_return_pct:  18.45
+sharpe_ratio:      1.23
+max_drawdown_pct:  -8.72
+win_rate_pct:      62.5
+num_trades:        24
+avg_holding_days:  4.2
+max_holding_days:  8
+calmar_ratio:      2.12
+profit_factor:     1.87
+vs_spy_pct:        +5.32
+spy_return_pct:    13.13
+oos_num_trades:    7
+oos_win_rate_pct:  71.4
+oos_total_pnl:     342.50
+elapsed_seconds:   12.3
 ```
 
 ## Logging Results
@@ -158,7 +201,7 @@ When an experiment is done, log it to `results.tsv` (tab-separated, NOT comma-se
 Header and columns:
 
 ```
-commit	strategy_name	total_return_pct	sharpe_ratio	max_drawdown_pct	win_rate_pct	num_trades	vs_spy_pct	status	description
+commit	strategy_name	total_return_pct	sharpe_ratio	max_drawdown_pct	win_rate_pct	num_trades	avg_holding_days	vs_spy_pct	oos_pnl	status	description
 ```
 
 - **commit**: git commit hash (short, 7 chars)
@@ -167,21 +210,23 @@ commit	strategy_name	total_return_pct	sharpe_ratio	max_drawdown_pct	win_rate_pct
 - **sharpe_ratio**: e.g. 1.23
 - **max_drawdown_pct**: e.g. -8.72 (negative number)
 - **win_rate_pct**: e.g. 62.5
-- **num_trades**: integer
+- **num_trades**: integer (round-trip trades)
+- **avg_holding_days**: e.g. 4.2 (lower is better)
 - **vs_spy_pct**: excess return vs buy-and-hold SPY (e.g. +5.32 or -3.10)
+- **oos_pnl**: out-of-sample total PnL in dollars (last 3 months)
 - **status**: `winner`, `mediocre`, `loser`, or `crash`
-  - `winner`: beats SPY AND Sharpe > 1.0
-  - `mediocre`: positive return but doesn't meet winner criteria
+  - `winner`: beats SPY, Sharpe > 1.0, 8+ trades, avg hold <= 15 days, positive OOS PnL
+  - `mediocre`: positive return but doesn't meet all winner criteria
   - `loser`: negative return or worse than SPY by > 5%
   - `crash`: code errored out
 - **description**: one-line description of the hypothesis
 
 Example:
 ```
-a1b2c3d	SPY Buy and Hold	13.13	0.89	-7.20	100.0	1	0.00	mediocre	baseline buy-and-hold SPY benchmark
-b2c3d4e	Congressional Copycat	18.45	1.23	-8.72	62.5	24	+5.32	winner	copy congress trades with momentum filter
-c3d4e5f	Full Moon Longs	-2.30	-0.15	-12.40	41.2	26	-15.43	loser	buy SPY on full moons sell on new moons
-d4e5f6g	Sentiment Vix Arb	0.00	0.00	0.00	0.0	0	0.00	crash	reddit sentiment vs VIX divergence trade (API error)
+a1b2c3d	SPY Buy and Hold	13.13	0.89	-7.20	100.0	1	365.0	0.00	0.00	mediocre	baseline buy-and-hold SPY benchmark
+b2c3d4e	Congressional Copycat	18.45	1.23	-8.72	62.5	24	4.2	+5.32	342.50	winner	copy congress trades with momentum filter
+c3d4e5f	Full Moon Longs	-2.30	-0.15	-12.40	41.2	26	14.1	-15.43	-120.00	loser	buy SPY on full moons sell on new moons
+d4e5f6g	Sentiment Vix Arb	0.00	0.00	0.00	0.0	0	0.0	0.00	0.00	crash	reddit sentiment vs VIX divergence trade (API error)
 ```
 
 ## The Experiment Loop
@@ -207,12 +252,15 @@ The experiment runs on a dedicated branch (e.g. `run/mar21`).
 
 When generating strategies, draw from these idea wells:
 
+All strategies should be **fast in, fast out** (1-10 day holds). Think swing trades, not investments.
+
 - **Cross-domain signals**: weather + commodities, sports outcomes + regional stocks, election polls + sector rotation, TikTok trends + consumer stocks
-- **Temporal anomalies**: day-of-week effects, month-end rebalancing flows, options expiration pinning, earnings whisper momentum
-- **Behavioral exploits**: retail panic selling (buy the VIX spike), meme stock lifecycle patterns, IPO lockup expiry dumps
-- **Copycat strategies**: follow insiders, follow congress, inverse Cramer, follow 13F filings with a momentum twist
+- **Temporal anomalies**: day-of-week effects, month-end rebalancing flows, options expiration pinning, earnings whisper momentum, post-holiday drift
+- **Behavioral exploits**: retail panic selling (buy the VIX spike), meme stock lifecycle patterns, IPO lockup expiry dumps, earnings overreaction reversal
+- **Copycat strategies**: follow insiders, follow congress, inverse Cramer, follow 13F filings with a quick momentum burst
 - **Prediction market arbitrage**: Polymarket probabilities vs equity implied odds
-- **Regime detection**: use macro data to detect market regimes, then switch sub-strategies
+- **Mean reversion snaps**: gap fills, oversold bounces after panic days, sector rotation whiplash
+- **Event-driven**: FOMC day patterns, CPI release reactions, jobs report fade, crypto halving proximity effects
 - **Microstructure**: unusual options volume, dark pool prints, short interest spikes combined with catalysts
 
 ### Timeout and Error Handling
