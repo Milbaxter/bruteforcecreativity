@@ -171,7 +171,10 @@ def run(data_fetcher, portfolio, start_date, end_date):
                     continue
 
                 # Check if earnings was ~2 trading days ago
-                days_since = (date - earn_date).days
+                # Normalize timezones for comparison
+                date_naive = pd.Timestamp(date).tz_localize(None) if hasattr(date, 'tzinfo') and date.tzinfo else pd.Timestamp(date)
+                earn_naive = pd.Timestamp(earn_date).tz_localize(None) if hasattr(earn_date, 'tzinfo') and earn_date.tzinfo else pd.Timestamp(earn_date)
+                days_since = (date_naive - earn_naive).days
                 if days_since < 1 or days_since > 5:
                     continue
 
