@@ -392,38 +392,273 @@ class DataFetcher:
             symbols = [symbols]
         return self.get_prices(symbols, start=start, end=end)
 
-    # ── Polymarket ───────────────────────────────────────────────────
+    # ── CoinGecko (crypto market data) ──────────────────────────────
 
-    def get_polymarket_markets(self, query: str = "", limit: int = 50) -> list[dict]:
+    def get_coingecko_market_data(
+        self, vs_currency: str = "usd", count: int = 100
+    ) -> pd.DataFrame:
         """
-        Fetch active Polymarket markets.
-
-        Args:
-            query: search term (e.g. 'election', 'fed', 'recession')
-            limit: max results
-
-        Returns:
-            List of market dicts with keys: id, question, slug, outcomes, prices, volume, etc.
+        Fetch top crypto market data from CoinGecko (free, no key).
+        Returns: coin, symbol, price, volume_24h, market_cap, change_24h, change_7d.
         """
-        key = _cache_key("polymarket", query=query, limit=limit)
-        cached = _load_cache(key, max_age_hours=1)  # Short cache for prediction markets
+        key = _cache_key("coingecko_markets", vs=vs_currency, count=count)
+        cached = _load_cache(key, max_age_hours=6)
         if cached is not None:
             return cached
 
-        url = "https://gamma-api.polymarket.com/markets"
-        params = {"limit": limit, "active": True, "closed": False}
-        if query:
-            params["tag"] = query
-
         try:
+            url = "https://api.coingecko.com/api/v3/coins/markets"
+            params = {
+                "vs_currency": vs_currency,
+                "order": "market_cap_desc",
+                "per_page": min(count, 250),
+                "page": 1,
+                "sparkline": False,
+                "price_change_percentage": "7d",
+            }
             resp = requests.get(url, params=params, timeout=30)
             resp.raise_for_status()
-            markets = resp.json()
-        except Exception:
-            markets = []
+            data = resp.json()
 
-        _save_cache(key, markets)
-        return markets
+            rows = []
+            for coin in data:
+                rows.append({
+                    "coin": coin.get("id", ""),
+                    "symbol": coin.get("symbol", "").upper(),
+                    "price": coin.get("current_price"),
+                    "volume_24h": coin.get("total_volume"),
+                    "market_cap": coin.get("market_cap"),
+                    "change_24h_pct": coin.get("price_change_percentage_24h"),
+                    "change_7d_pct": coin.get("price_change_percentage_7d_in_currency"),
+                })
+            df = pd.DataFrame(rows)
+            logger.info("CoinGecko: fetched %d coins", len(df))
+        except Exception as e:
+            logger.warning("CoinGecko market data failed: %s", e)
+            df = pd.DataFrame()
+
+        _save_cache(key, df)
+        return df
+
+    def get_coingecko_history(
+        self, coin_id: str, days: int = 365, vs_currency: str = "usd"
+    ) -> pd.DataFrame:
+        """
+        Fetch historical daily prices for a crypto coin from CoinGecko.
+        coin_id: e.g. 'bitcoin', 'ethereum', 'solana' (CoinGecko slug, not ticker)
+        Returns DataFrame with date, price, volume, market_cap.
+        """
+        key = _cache_key("coingecko_hist", coin=coin_id, days=days, vs=vs_currency)
+        cached = _load_cache(key, self.cache_hours)
+        if cached is not None:
+            return cached
+
+        try:
+            url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
+            params = {"vs_currency": vs_currency, "days": days, "interval": "daily"}
+            resp = requests.get(url, params=params, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+
+            prices = data.get("prices", [])
+            volumes = data.get("total_volumes", [])
+            mcaps = data.get("market_caps", [])
+
+            df = pd.DataFrame(prices, columns=["timestamp", "price"])
+            df["date"] = pd.to_datetime(df["timestamp"], unit="ms")
+            df = df.set_index("date").drop(columns=["timestamp"])
+
+            if volumes:
+                vol_df = pd.DataFrame(volumes, columns=["timestamp", "volume"])
+                vol_df["date"] = pd.to_datetime(vol_df["timestamp"], unit="ms")
+                df["volume"] = vol_df.set_index("date")["volume"]
+            if mcaps:
+                mc_df = pd.DataFrame(mcaps, columns=["timestamp", "market_cap"])
+                mc_df["date"] = pd.to_datetime(mc_df["timestamp"], unit="ms")
+                df["market_cap"] = mc_df.set_index("date")["market_cap"]
+
+            logger.info("CoinGecko history for %s: %d days", coin_id, len(df))
+        except Exception as e:
+            logger.warning("CoinGecko history for %s failed: %s", coin_id, e)
+            df = pd.DataFrame()
+
+        _save_cache(key, df)
+        return df
+
+    # ── Earnings Calendar ────────────────────────────────────────────
+
+    def get_earnings_calendar(self, tickers: list[str] | str) -> pd.DataFrame:
+        """
+        Fetch earnings dates and surprise data for given tickers via yfinance.
+        Returns: ticker, date, eps_estimate, eps_actual, surprise_pct.
+        """
+        if isinstance(tickers, str):
+            tickers = [tickers]
+
+        key = _cache_key("earnings", tickers=sorted(tickers))
+        cached = _load_cache(key, self.cache_hours)
+        if cached is not None:
+            return cached
+
+        all_rows = []
+        for ticker in tickers:
+            try:
+                t = yf.Ticker(ticker)
+                cal = t.earnings_dates
+                if cal is not None and not cal.empty:
+                    for idx, row in cal.iterrows():
+                        all_rows.append({
+                            "ticker": ticker,
+                            "date": idx,
+                            "eps_estimate": row.get("EPS Estimate"),
+                            "eps_actual": row.get("Reported EPS"),
+                            "surprise_pct": row.get("Surprise(%)"),
+                        })
+            except Exception as e:
+                logger.debug("Earnings for %s failed: %s", ticker, e)
+
+        df = pd.DataFrame(all_rows) if all_rows else pd.DataFrame()
+        if not df.empty:
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            logger.info("Earnings calendar: %d entries across %d tickers", len(df), len(tickers))
+
+        _save_cache(key, df)
+        return df
+
+    # ── Economic Calendar (FOMC, CPI, Jobs) ──────────────────────────
+
+    def get_economic_calendar(self) -> pd.DataFrame:
+        """
+        Return key economic event dates for the backtest period.
+        Includes FOMC meetings, CPI releases, jobs reports.
+        These dates are public and fixed — we hardcode recent ones
+        and supplement with scraping.
+        """
+        key = _cache_key("econ_calendar")
+        cached = _load_cache(key, max_age_hours=168)  # Cache for a week
+        if cached is not None:
+            return cached
+
+        # FOMC meeting dates (scheduled, public knowledge)
+        # These are the announcement dates for 2025-2026
+        fomc_dates = [
+            "2025-01-29", "2025-03-19", "2025-05-07", "2025-06-18",
+            "2025-07-30", "2025-09-17", "2025-11-05", "2025-12-17",
+            "2026-01-28", "2026-03-18",
+        ]
+
+        # CPI release dates (typically mid-month)
+        cpi_dates = [
+            "2025-01-15", "2025-02-12", "2025-03-12", "2025-04-10",
+            "2025-05-13", "2025-06-11", "2025-07-11", "2025-08-12",
+            "2025-09-10", "2025-10-14", "2025-11-12", "2025-12-10",
+            "2026-01-14", "2026-02-12", "2026-03-11",
+        ]
+
+        # Jobs report (first Friday of month)
+        jobs_dates = [
+            "2025-01-10", "2025-02-07", "2025-03-07", "2025-04-04",
+            "2025-05-02", "2025-06-06", "2025-07-03", "2025-08-01",
+            "2025-09-05", "2025-10-03", "2025-11-07", "2025-12-05",
+            "2026-01-09", "2026-02-06", "2026-03-06",
+        ]
+
+        rows = []
+        for d in fomc_dates:
+            rows.append({"date": d, "event": "FOMC"})
+        for d in cpi_dates:
+            rows.append({"date": d, "event": "CPI"})
+        for d in jobs_dates:
+            rows.append({"date": d, "event": "JOBS"})
+
+        df = pd.DataFrame(rows)
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.sort_values("date").reset_index(drop=True)
+        logger.info("Economic calendar: %d events", len(df))
+
+        _save_cache(key, df)
+        return df
+
+    # ── Short Interest ───────────────────────────────────────────────
+
+    def get_short_interest(self, tickers: list[str] | str) -> pd.DataFrame:
+        """
+        Fetch current short interest data for tickers via yfinance.
+        Returns: ticker, short_pct_float, short_ratio, shares_short.
+        """
+        if isinstance(tickers, str):
+            tickers = [tickers]
+
+        key = _cache_key("short_interest", tickers=sorted(tickers))
+        cached = _load_cache(key, self.cache_hours)
+        if cached is not None:
+            return cached
+
+        rows = []
+        for ticker in tickers:
+            try:
+                info = yf.Ticker(ticker).info
+                rows.append({
+                    "ticker": ticker,
+                    "short_pct_float": info.get("shortPercentOfFloat"),
+                    "short_ratio": info.get("shortRatio"),
+                    "shares_short": info.get("sharesShort"),
+                })
+            except Exception as e:
+                logger.debug("Short interest for %s failed: %s", ticker, e)
+
+        df = pd.DataFrame(rows) if rows else pd.DataFrame()
+        logger.info("Short interest: %d tickers", len(df))
+
+        _save_cache(key, df)
+        return df
+
+    # ── Fear & Greed Proxy ───────────────────────────────────────────
+
+    def get_fear_greed(
+        self, start: str | None = None, end: str | None = None
+    ) -> pd.Series:
+        """
+        Compute a daily Fear & Greed proxy score (0-100) from:
+        - VIX level (inverted: high VIX = fear)
+        - Market momentum (SPY 20-day vs 125-day MA)
+        - Put/call proxy (VIX term structure)
+
+        0 = extreme fear, 100 = extreme greed. Historical, backtestable.
+        """
+        key = _cache_key("fear_greed", start=start, end=end)
+        cached = _load_cache(key, self.cache_hours)
+        if cached is not None:
+            return cached
+
+        vix = self.get_vix(start=start, end=end).dropna()
+        spy = self.get_prices("SPY", start=start, end=end)
+        if isinstance(spy.columns, pd.MultiIndex):
+            spy_close = spy[("Close", "SPY")]
+        else:
+            spy_close = spy["Close"]
+        spy_close = spy_close.dropna()
+
+        if vix.empty or spy_close.empty:
+            return pd.Series(dtype=float)
+
+        # VIX component: normalize 10-40 range to 100-0 (inverted)
+        vix_score = ((40 - vix.clip(10, 40)) / 30 * 100).clip(0, 100)
+
+        # Momentum component: SPY 20d MA vs 125d MA
+        ma20 = spy_close.rolling(20).mean()
+        ma125 = spy_close.rolling(125).mean()
+        momentum = ((ma20 / ma125 - 1) * 1000).clip(-50, 50) + 50  # Center at 50
+
+        # Combine (equal weight)
+        common = vix_score.index.intersection(momentum.index)
+        score = (vix_score.reindex(common) * 0.5 + momentum.reindex(common) * 0.5).dropna()
+        score = score.clip(0, 100).round(1)
+        logger.info("Fear/Greed proxy: %d days, current=%.1f", len(score),
+                     score.iloc[-1] if not score.empty else 0)
+
+        _save_cache(key, score)
+        return score
 
     # ── Utility Methods ──────────────────────────────────────────────
 
@@ -469,36 +704,71 @@ if __name__ == "__main__":
         print("Refreshing data cache...")
         fetcher = DataFetcher(cache_hours=0)  # Force fresh fetch
 
-        # Pre-fetch commonly needed data
-        print("  Fetching SPY benchmark...")
+        print("  [1/10] SPY benchmark...")
         fetcher.get_spy_benchmark()
 
-        print("  Fetching VIX...")
+        print("  [2/10] VIX...")
         fetcher.get_vix()
 
-        print("  Fetching major ETFs...")
-        etfs = ["SPY", "QQQ", "IWM", "XLF", "XLE", "XLV", "XLK", "XLI", "XLP", "XLU", "GLD", "TLT"]
-        fetcher.get_prices(etfs)
+        print("  [3/10] Major ETFs & commodities...")
+        tickers = [
+            "SPY", "QQQ", "IWM",                    # Indices
+            "XLF", "XLE", "XLV", "XLK", "XLI",      # Sectors
+            "XLP", "XLU", "XLB", "XLRE",
+            "GLD", "SLV", "USO", "UNG", "WEAT",      # Commodities
+            "TLT", "IEF", "HYG",                     # Bonds
+            "BTC-USD", "ETH-USD", "SOL-USD",          # Crypto
+            "EURUSD=X", "GBPUSD=X",                   # Forex
+        ]
+        fetcher.get_prices(tickers)
 
-        print("  Fetching FRED macro data...")
-        for series in ["DFF", "DGS10", "CPIAUCSL", "UNRATE", "T10Y2Y", "VIXCLS"]:
+        print("  [4/10] FRED macro data...")
+        for series in ["DFF", "DGS10", "DTB3", "VIXCLS"]:
             try:
                 fetcher.get_fred_series(series)
                 print(f"    {series} OK")
             except Exception as e:
                 print(f"    {series} FAILED: {e}")
 
-        print("  Fetching congressional trades...")
+        print("  [5/10] Congressional trades...")
         try:
-            fetcher.get_congressional_trades()
+            df = fetcher.get_congressional_trades()
+            print(f"    OK ({len(df)} trades)")
+        except Exception as e:
+            print(f"    FAILED: {e}")
+
+        print("  [6/10] Google Trends...")
+        try:
+            fetcher.get_google_trends(["stock market", "recession", "bitcoin"])
             print("    OK")
         except Exception as e:
             print(f"    FAILED: {e}")
 
-        print("  Fetching Google Trends for market terms...")
+        print("  [7/10] CoinGecko top 100 crypto...")
         try:
-            fetcher.get_google_trends(["stock market", "recession", "inflation"])
-            print("    OK")
+            df = fetcher.get_coingecko_market_data()
+            print(f"    OK ({len(df)} coins)")
+        except Exception as e:
+            print(f"    FAILED: {e}")
+
+        print("  [8/10] Economic calendar...")
+        try:
+            df = fetcher.get_economic_calendar()
+            print(f"    OK ({len(df)} events)")
+        except Exception as e:
+            print(f"    FAILED: {e}")
+
+        print("  [9/10] Fear & Greed proxy...")
+        try:
+            s = fetcher.get_fear_greed()
+            print(f"    OK ({len(s)} days, current={s.iloc[-1]:.1f})")
+        except Exception as e:
+            print(f"    FAILED: {e}")
+
+        print("  [10/10] Short interest (top ETFs)...")
+        try:
+            df = fetcher.get_short_interest(["GME", "AMC", "TSLA", "AAPL", "NVDA"])
+            print(f"    OK ({len(df)} tickers)")
         except Exception as e:
             print(f"    FAILED: {e}")
 

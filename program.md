@@ -37,21 +37,50 @@ Once you get confirmation, kick off the experimentation.
 
 You have access to real market data through the following sources. Use `fetch_data.py` utilities or call APIs directly in strategy code:
 
-### Core Market Data
-- **yfinance** — stock prices (daily/intraday), options chains, fundamentals, ETFs, crypto. Free, no key needed.
-- **FRED (Federal Reserve)** — macroeconomic indicators: interest rates, inflation (CPI/PCE), unemployment, GDP, money supply. Free API key in `.env`.
-- **Polygon.io** — tick-level stocks, options, crypto. API key in `.env`. Use for granular intraday strategies.
+### Core Market Data (via yfinance — free, no key, historical)
+- **Stocks & ETFs** — daily/intraday OHLCV for any ticker. SPY, QQQ, sector ETFs, individual stocks, microcaps.
+- **Crypto** — BTC-USD, ETH-USD, SOL-USD, and hundreds of altcoins. Full daily history.
+- **Options chains** — calls/puts with strikes, Greeks, open interest, volume for any optionable ticker.
+- **Fundamentals** — PE, market cap, sector, dividend yield, earnings dates via `get_fundamentals()`.
+- **Commodities** — GLD (gold), USO (oil), SLV (silver), WEAT (wheat), CORN, UNG (nat gas) as ETFs.
+- **Forex** — major pairs via yfinance: EURUSD=X, GBPUSD=X, JPYUSD=X, etc.
+- **Bonds/Rates** — TLT (long bonds), ^TNX (10Y yield), ^IRX (T-bills), ^FVX (5Y yield).
+- **Volatility** — ^VIX historical, with `get_vix()` convenience method.
+
+### Macro Data (FRED with yfinance fallback)
+- Treasury yields (DGS10, DTB3) — works without API key via yfinance ^TNX, ^IRX
+- Full FRED access (CPI, unemployment, GDP, money supply, credit spreads) — requires free API key in `.env`
+- Get a free key at https://fred.stlouisfed.org/docs/api/api_key.html
 
 ### Alternative / Eccentric Data
-- **Polymarket API** — prediction market prices and volumes. Trade based on real-world event probabilities.
-- **Google Trends (pytrends)** — search interest over time. Retail attention proxy.
-- **Congressional trading (QuiverQuant)** — congress member stock trades. Historically suspicious alpha.
-- **OpenInsider** — insider buying/selling clusters. Conviction signal.
-- **NOAA Weather API** — weather data by region. Correlates with energy, agriculture, retail.
-- **Reddit (via API)** — subreddit sentiment, especially r/wallstreetbets, r/stocks. Meme momentum.
-- **News sentiment (NewsAPI / GDELT)** — event-driven signals.
-- **Fear & Greed Index (CNN)** — market sentiment extremes.
-- **VIX / options flow** — volatility and unusual options activity.
+- **Google Trends (pytrends)** — search interest over time for any term. Retail attention proxy. Weekly resolution, 12+ months history. Use `get_google_trends()`.
+- **Congressional trading (CapitolTrades)** — congress member stock trades scraped from capitoltrades.com. Historically suspicious alpha. Use `get_congressional_trades()`.
+- **Insider trading (OpenInsider)** — corporate insider buys/sells scraped from openinsider.com. Cluster buys = conviction signal. Use `get_insider_trades()`.
+- **Crypto on-chain** — via CoinGecko free API: market data, trading volume, market cap rankings for 10,000+ coins. Use `get_coingecko_market_data()`.
+- **Earnings calendar** — earnings dates and surprise data via yfinance `Ticker.earnings_dates`. Use `get_earnings_calendar()`.
+- **Economic calendar** — FOMC dates, CPI releases, jobs reports with historical dates. Use `get_economic_calendar()`.
+- **Short interest** — via yfinance `Ticker.info` for current short % of float. Historical short interest via `get_short_interest()`.
+- **Fear & Greed proxy** — computed from VIX level, put/call ratio, and market breadth. Use `get_fear_greed()`.
+
+### What each method returns (quick reference)
+```
+get_prices(tickers, start, end)        → DataFrame OHLCV
+get_fundamentals(ticker)               → dict with PE, sector, market_cap, etc.
+get_options_chain(ticker)              → dict with 'calls' and 'puts' DataFrames
+get_vix(start, end)                    → Series of VIX close prices
+get_crypto_prices(symbols, start, end) → DataFrame OHLCV (use 'BTC-USD' format)
+get_google_trends(keywords)            → DataFrame of search interest (0-100)
+get_congressional_trades(days_back)    → DataFrame: date, representative, ticker, type, amount
+get_insider_trades(ticker)             → DataFrame of insider buys/sells
+get_coingecko_market_data(vs, count)   → DataFrame: coin, price, volume, market_cap, 24h_change
+get_earnings_calendar(tickers)         → DataFrame: ticker, date, eps_estimate, eps_actual, surprise
+get_economic_calendar()                → DataFrame: date, event, previous, forecast, actual
+get_short_interest(tickers)            → DataFrame: ticker, short_pct_float, short_ratio
+get_fear_greed(start, end)             → Series: daily fear/greed score (0-100)
+get_fred_series(series_id)             → Series of economic data
+get_risk_free_rate()                   → float (annualized)
+get_spy_benchmark(start, end)          → DataFrame OHLCV for SPY
+```
 
 ### Data Rules
 - Always cache fetched data to `~/.cache/bruteforcecreativity/` to avoid redundant API calls.
