@@ -178,28 +178,40 @@ class DataFetcher:
         if cached is not None:
             return cached
 
+        # Try sources in order: fredapi (if key), FRED CSV (no key!), yfinance fallback
+        data = pd.Series(dtype=float)
+
+        # Source 1: fredapi with API key
         if self.fred_api_key:
-            from fredapi import Fred
+            try:
+                from fredapi import Fred
+                fred = Fred(api_key=self.fred_api_key)
+                data = fred.get_series(series_id, observation_start=start, observation_end=end)
+                logger.info("FRED %s: %d observations via API key", series_id, len(data))
+            except Exception as e:
+                logger.warning("fredapi for %s failed: %s", series_id, e)
 
-            fred = Fred(api_key=self.fred_api_key)
-            data = fred.get_series(series_id, observation_start=start, observation_end=end)
-            logger.info("FRED %s: %d observations via API key", series_id, len(data))
-        else:
-            # No API key — try yfinance as fallback for common series
-            # FRED DEMO_KEY does not work; a real key is needed for direct FRED access
-            logger.warning("No FRED_API_KEY set. Using yfinance fallback for %s. "
-                          "Get a free key at https://fred.stlouisfed.org/docs/api/api_key.html",
-                          series_id)
+        # Source 2: FRED CSV endpoint (NO API KEY NEEDED)
+        if data.empty:
+            try:
+                csv_url = (
+                    f"https://fred.stlouisfed.org/graph/fredgraph.csv"
+                    f"?id={series_id}&cosd={start}&coed={end}"
+                )
+                df = pd.read_csv(csv_url, parse_dates=["observation_date"], index_col="observation_date")
+                col = df.columns[0]
+                data = pd.to_numeric(df[col], errors="coerce").dropna()
+                data.index.name = None
+                logger.info("FRED %s: %d observations via CSV (no key needed)", series_id, len(data))
+            except Exception as e:
+                logger.warning("FRED CSV for %s failed: %s", series_id, e)
 
-            # Map common FRED series to yfinance tickers
+        # Source 3: yfinance fallback for a few common series
+        if data.empty:
             fred_to_yf = {
-                "DFF": "^IRX",        # 13-week T-bill as proxy for fed funds
-                "DTB3": "^IRX",       # 3-month T-bill rate
-                "DGS10": "^TNX",      # 10-year Treasury yield
-                "DGS2": "^FVX",       # 5-year Treasury as proxy for 2-year
-                "VIXCLS": "^VIX",     # VIX
+                "DFF": "^IRX", "DTB3": "^IRX", "DGS10": "^TNX",
+                "DGS2": "^FVX", "VIXCLS": "^VIX",
             }
-
             yf_ticker = fred_to_yf.get(series_id)
             if yf_ticker:
                 try:
@@ -207,15 +219,9 @@ class DataFetcher:
                     if isinstance(df.columns, pd.MultiIndex):
                         df.columns = df.columns.get_level_values(0)
                     data = df["Close"].dropna()
-                    logger.info("FRED %s: used yfinance %s fallback (%d rows)",
-                               series_id, yf_ticker, len(data))
+                    logger.info("FRED %s: yfinance %s fallback (%d rows)", series_id, yf_ticker, len(data))
                 except Exception as e:
                     logger.warning("yfinance fallback for %s failed: %s", series_id, e)
-                    data = pd.Series(dtype=float)
-            else:
-                logger.warning("No yfinance fallback for FRED series %s — returning empty. "
-                              "Set FRED_API_KEY in .env for full macro data access.", series_id)
-                data = pd.Series(dtype=float)
 
         _save_cache(key, data)
         return data
@@ -660,6 +666,172 @@ class DataFetcher:
         _save_cache(key, score)
         return score
 
+    # ── Wikipedia Pageviews (public attention proxy) ────────────────
+
+    def get_wikipedia_pageviews(
+        self,
+        article: str,
+        start: str | None = None,
+        end: str | None = None,
+        granularity: str = "daily",
+    ) -> pd.Series:
+        """
+        Fetch Wikipedia pageview counts for an article (public attention proxy).
+        Uses Wikimedia REST API — free, no key, data back to July 2015.
+
+        Args:
+            article: Wikipedia article title (e.g. 'Tesla,_Inc.', 'Bitcoin', 'GameStop')
+                     Use underscores for spaces, match exact Wikipedia title.
+            start: start date 'YYYY-MM-DD' (default: 12 months ago)
+            end: end date 'YYYY-MM-DD' (default: today)
+            granularity: 'daily' or 'monthly'
+
+        Returns:
+            Series with date index and pageview counts.
+        """
+        if end is None:
+            end = datetime.now().strftime("%Y-%m-%d")
+        if start is None:
+            start = (datetime.now() - timedelta(days=DEFAULT_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+
+        key = _cache_key("wiki_pageviews", article=article, start=start, end=end, gran=granularity)
+        cached = _load_cache(key, self.cache_hours)
+        if cached is not None:
+            return cached
+
+        try:
+            start_fmt = start.replace("-", "") + "00"
+            end_fmt = end.replace("-", "") + "00"
+            url = (
+                f"https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article"
+                f"/en.wikipedia/all-access/all-agents/{article}/{granularity}/{start_fmt}/{end_fmt}"
+            )
+            resp = requests.get(url, headers={"User-Agent": "bruteforcecreativity/1.0"}, timeout=15)
+            resp.raise_for_status()
+            items = resp.json().get("items", [])
+
+            dates = []
+            views = []
+            for item in items:
+                ts = item["timestamp"]
+                dates.append(pd.Timestamp(f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}"))
+                views.append(item["views"])
+
+            data = pd.Series(views, index=dates, name=f"pageviews_{article}")
+            logger.info("Wikipedia pageviews for %s: %d days", article, len(data))
+        except Exception as e:
+            logger.warning("Wikipedia pageviews for %s failed: %s", article, e)
+            data = pd.Series(dtype=float)
+
+        _save_cache(key, data)
+        return data
+
+    # ── Open-Meteo Weather (historical weather data) ─────────────────
+
+    def get_weather_history(
+        self,
+        latitude: float,
+        longitude: float,
+        start: str | None = None,
+        end: str | None = None,
+        variables: list[str] | None = None,
+    ) -> pd.DataFrame:
+        """
+        Fetch historical daily weather data from Open-Meteo (free, no key, data since 1940).
+
+        Args:
+            latitude: e.g. 40.71 (NYC), 29.76 (Houston), 41.88 (Chicago)
+            longitude: e.g. -74.01 (NYC), -95.37 (Houston), -87.63 (Chicago)
+            start: start date 'YYYY-MM-DD'
+            end: end date 'YYYY-MM-DD'
+            variables: daily weather variables to fetch. Defaults to
+                       ['temperature_2m_max', 'temperature_2m_min', 'precipitation_sum',
+                        'windspeed_10m_max', 'snowfall_sum']
+
+        Returns:
+            DataFrame with date index and weather variable columns.
+
+        Common use cases for strategies:
+            - Extreme cold/heat + energy stocks (XLE, UNG)
+            - Hurricanes/storms + insurance stocks, utilities
+            - Snowfall + retail/travel stocks
+        """
+        if end is None:
+            end = datetime.now().strftime("%Y-%m-%d")
+        if start is None:
+            start = (datetime.now() - timedelta(days=DEFAULT_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+        if variables is None:
+            variables = [
+                "temperature_2m_max", "temperature_2m_min",
+                "precipitation_sum", "windspeed_10m_max", "snowfall_sum",
+            ]
+
+        key = _cache_key("weather", lat=latitude, lon=longitude, start=start, end=end, vars=variables)
+        cached = _load_cache(key, self.cache_hours)
+        if cached is not None:
+            return cached
+
+        try:
+            url = "https://archive-api.open-meteo.com/v1/archive"
+            params = {
+                "latitude": latitude,
+                "longitude": longitude,
+                "start_date": start,
+                "end_date": end,
+                "daily": ",".join(variables),
+                "timezone": "America/New_York",
+            }
+            resp = requests.get(url, params=params, timeout=30)
+            resp.raise_for_status()
+            daily = resp.json().get("daily", {})
+
+            dates = daily.pop("time", [])
+            df = pd.DataFrame(daily, index=pd.to_datetime(dates))
+            df.index.name = None
+            logger.info("Weather data (%.2f, %.2f): %d days, %d vars", latitude, longitude, len(df), len(df.columns))
+        except Exception as e:
+            logger.warning("Open-Meteo weather fetch failed: %s", e)
+            df = pd.DataFrame()
+
+        _save_cache(key, df)
+        return df
+
+    # ── Crypto Fear & Greed Index ────────────────────────────────────
+
+    def get_crypto_fear_greed(self, days: int = 365) -> pd.Series:
+        """
+        Fetch the Crypto Fear & Greed Index from alternative.me (free, no key, daily since 2018).
+        Score 0-100: 0 = Extreme Fear, 100 = Extreme Greed.
+
+        Great for contrarian crypto entries: buy when crypto market is in extreme fear.
+        """
+        key = _cache_key("crypto_fng", days=days)
+        cached = _load_cache(key, self.cache_hours)
+        if cached is not None:
+            return cached
+
+        try:
+            url = f"https://api.alternative.me/fng/?limit={days}&format=json"
+            resp = requests.get(url, timeout=15)
+            resp.raise_for_status()
+            items = resp.json().get("data", [])
+
+            dates = []
+            values = []
+            for item in items:
+                dates.append(pd.Timestamp.fromtimestamp(int(item["timestamp"])))
+                values.append(int(item["value"]))
+
+            data = pd.Series(values, index=dates, name="crypto_fear_greed")
+            data = data.sort_index()
+            logger.info("Crypto Fear & Greed: %d days, current=%d", len(data), data.iloc[-1] if not data.empty else 0)
+        except Exception as e:
+            logger.warning("Crypto Fear & Greed fetch failed: %s", e)
+            data = pd.Series(dtype=float)
+
+        _save_cache(key, data)
+        return data
+
     # ── Utility Methods ──────────────────────────────────────────────
 
     def get_risk_free_rate(self) -> float:
@@ -765,10 +937,32 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"    FAILED: {e}")
 
-        print("  [10/10] Short interest (top ETFs)...")
+        print("  [10/13] Short interest (top ETFs)...")
         try:
             df = fetcher.get_short_interest(["GME", "AMC", "TSLA", "AAPL", "NVDA"])
             print(f"    OK ({len(df)} tickers)")
+        except Exception as e:
+            print(f"    FAILED: {e}")
+
+        print("  [11/13] Wikipedia pageviews...")
+        try:
+            for article in ["Tesla,_Inc.", "Bitcoin", "GameStop"]:
+                s = fetcher.get_wikipedia_pageviews(article)
+                print(f"    {article}: {len(s)} days")
+        except Exception as e:
+            print(f"    FAILED: {e}")
+
+        print("  [12/13] Weather history (Houston for energy)...")
+        try:
+            df = fetcher.get_weather_history(29.76, -95.37)
+            print(f"    OK ({len(df)} days, {len(df.columns)} vars)")
+        except Exception as e:
+            print(f"    FAILED: {e}")
+
+        print("  [13/13] Crypto Fear & Greed Index...")
+        try:
+            s = fetcher.get_crypto_fear_greed()
+            print(f"    OK ({len(s)} days, current={s.iloc[-1]})")
         except Exception as e:
             print(f"    FAILED: {e}")
 

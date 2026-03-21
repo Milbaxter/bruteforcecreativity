@@ -61,6 +61,9 @@ You have access to real market data through the following sources. Use `fetch_da
 - **Economic calendar** — FOMC dates, CPI releases, jobs reports with historical dates. Use `get_economic_calendar()`.
 - **Short interest** — via yfinance `Ticker.info` for current short % of float. Historical short interest via `get_short_interest()`.
 - **Fear & Greed proxy** — computed from VIX level, put/call ratio, and market breadth. Use `get_fear_greed()`.
+- **Wikipedia pageviews** — daily page view counts for any Wikipedia article (public attention proxy). Free, no key, data back to 2015. Use `get_wikipedia_pageviews('Tesla,_Inc.')`. Great for detecting retail attention spikes on stocks.
+- **Weather history (Open-Meteo)** — historical daily weather for any location since 1940. Free, no key. Temp, precipitation, wind, snow. Use `get_weather_history(lat, lon)`. Cross with energy, ag, retail stocks.
+- **Crypto Fear & Greed Index** — daily crypto sentiment score (0=Extreme Fear, 100=Extreme Greed) from alternative.me. Daily since 2018. Use `get_crypto_fear_greed()`. Contrarian crypto entry signal.
 
 ### What each method returns (quick reference)
 ```
@@ -78,6 +81,9 @@ get_economic_calendar()                → DataFrame: date, event, previous, for
 get_short_interest(tickers)            → DataFrame: ticker, short_pct_float, short_ratio
 get_fear_greed(start, end)             → Series: daily fear/greed score (0-100)
 get_fred_series(series_id)             → Series of economic data
+get_wikipedia_pageviews(article)       → Series of daily pageview counts
+get_weather_history(lat, lon)          → DataFrame: temp_max, temp_min, precip, wind, snow
+get_crypto_fear_greed(days)            → Series: daily crypto fear/greed score (0-100)
 get_risk_free_rate()                   → float (annualized)
 get_spy_benchmark(start, end)          → DataFrame OHLCV for SPY
 ```
@@ -283,7 +289,7 @@ When generating strategies, draw from these idea wells:
 
 All strategies should be **fast in, fast out** (1-10 day holds). Think swing trades, not investments.
 
-- **Cross-domain signals**: weather + commodities, sports outcomes + regional stocks, election polls + sector rotation, TikTok trends + consumer stocks
+- **Cross-domain signals**: weather + commodities (use Open-Meteo!), Wikipedia attention spikes + stock moves, crypto fear/greed + BTC entries, sports outcomes + regional stocks, election polls + sector rotation, TikTok trends + consumer stocks
 - **Temporal anomalies**: day-of-week effects, month-end rebalancing flows, options expiration pinning, earnings whisper momentum, post-holiday drift
 - **Behavioral exploits**: retail panic selling (buy the VIX spike), meme stock lifecycle patterns, IPO lockup expiry dumps, earnings overreaction reversal
 - **Copycat strategies**: follow insiders, follow congress, inverse Cramer, follow 13F filings with a quick momentum burst
