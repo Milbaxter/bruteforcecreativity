@@ -44,11 +44,11 @@ def run(data_fetcher, portfolio, start_date, end_date):
 
     # Fetch weather for key Midwest agricultural locations
     # Des Moines, Iowa (corn belt center)
-    iowa_weather = data_fetcher.get_weather_history(lat=41.6, lon=-93.6)
+    iowa_weather = data_fetcher.get_weather_history(latitude=41.6, longitude=-93.6)
     # Champaign, Illinois (corn/soybean belt)
-    illinois_weather = data_fetcher.get_weather_history(lat=40.1, lon=-88.2)
+    illinois_weather = data_fetcher.get_weather_history(latitude=40.1, longitude=-88.2)
     # Wichita, Kansas (wheat belt)
-    kansas_weather = data_fetcher.get_weather_history(lat=37.7, lon=-97.3)
+    kansas_weather = data_fetcher.get_weather_history(latitude=37.7, longitude=-97.3)
 
     if iowa_weather is None or iowa_weather.empty:
         return
