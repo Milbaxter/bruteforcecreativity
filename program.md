@@ -196,9 +196,23 @@ The `STRATEGY["universe"]` list MUST contain every ticker the strategy might tra
 A strategy earns "winner" status ONLY if ALL of these are true:
 - Beats SPY return
 - Sharpe ratio > 1.0
+- Max drawdown >= -15% (limited downside — we don't want strategies that can lose big)
 - At least 8 round-trip trades (prevents flukes)
 - Average holding period <= 15 days (we want fast in-and-out)
 - At least 2 out-of-sample trades with positive total PnL (proves it's not just curve-fitted to old data)
+
+### Walk-Forward Validation
+
+When a strategy passes the initial screen as a "winner", the engine automatically re-runs it on 2 additional 12-month windows to confirm robustness:
+- **Window 1**: 24 months ago → 12 months ago
+- **Window 2**: 18 months ago → 6 months ago
+- **Window 3**: the original (12 months ago → today) — already tested
+
+Each additional window must show: positive return, Sharpe > 0.5, max drawdown >= -20%, at least 5 trades. The strategy passes walk-forward if it clears at least 2 of 3 windows.
+
+**If walk-forward passes**: the strategy is promoted to `winners/` (auto-copied) and logged to `winners/results.tsv`. These are the strategies worth deploying.
+
+**If walk-forward fails**: the strategy is downgraded to "mediocre". It got lucky in one period but doesn't generalize — not worth real money.
 
 ### Volume Warnings
 
@@ -250,8 +264,8 @@ commit	strategy_name	total_return_pct	sharpe_ratio	max_drawdown_pct	win_rate_pct
 - **vs_spy_pct**: excess return vs buy-and-hold SPY (e.g. +5.32 or -3.10)
 - **oos_pnl**: out-of-sample total PnL in dollars (last 3 months)
 - **status**: `winner`, `mediocre`, `loser`, or `crash`
-  - `winner`: beats SPY, Sharpe > 1.0, 8+ trades, avg hold <= 15 days, positive OOS PnL
-  - `mediocre`: positive return but doesn't meet all winner criteria
+  - `winner`: beats SPY, Sharpe > 1.0, max drawdown >= -15%, 8+ trades, avg hold <= 15 days, positive OOS PnL, AND passes walk-forward validation (2/3 windows)
+  - `mediocre`: positive return but doesn't meet all winner criteria, OR passed initial screen but failed walk-forward
   - `loser`: negative return or worse than SPY by > 5%
   - `crash`: code errored out
 - **description**: one-line description of the hypothesis
@@ -271,17 +285,22 @@ The experiment runs on a dedicated branch (e.g. `run/mar21`).
 **LOOP FOREVER:**
 
 1. **Review state**: check `results.tsv` to see what's been tried, what worked, what didn't. Look at the current best strategies for inspiration.
-2. **Generate a strategy**: come up with a novel, eccentric strategy. Be creative. Cross domains. Combine weird signals. Think about what a bored quant at 2am would try that they'd never pitch to their boss.
-3. **Implement it**: write the strategy file in `strategies/`. Include the full `STRATEGY` dict and `run()` function.
-4. **git commit**: commit the strategy file.
-5. **Run the backtest**: `uv run backtest.py strategies/<name>.py > run.log 2>&1`
-6. **Read results**: extract the metrics from `run.log`.
-7. **If crashed**: read `tail -n 50 run.log` for the traceback. If it's a simple fix (typo, API issue, missing data), fix and re-run. If fundamentally broken, log as crash and move on.
-8. **Log to results.tsv**: record the outcome.
-9. **If winner**: keep the commit, celebrate internally, think about variations.
-10. **If not winner**: keep the commit anyway (we want the history), but note the status.
-11. **Evolve**: every 5-10 strategies, look at patterns in results.tsv. What domains/signals appear in winners? Generate variations on winning themes. But also keep throwing wild ideas — the whole point is brute force creativity.
-12. **GOTO 1**
+2. **Diversity check (MANDATORY)**: before generating, look at the last 3 strategies in `results.tsv`. If they share the same core signal type or universe (e.g., all rotate GLD/QQQ/XLE, or all use momentum on the same ETFs), you MUST use a completely different data source and signal for the next strategy. Specifically:
+   - **No more than 3 strategies in a row** with the same universe or signal type. If the last 3 all traded the same tickers or used the same indicator, break the pattern.
+   - **Every 5th strategy MUST use an alternative data source**: Wikipedia pageviews, weather (Open-Meteo), crypto fear/greed index, congressional trades, insider trades, Google Trends, or earnings calendar. Not just price/volume data.
+   - **Penalize repetition**: if you catch yourself generating "X Rotation v3" or "Y Momentum with different parameters", STOP. That's parameter optimization, not creativity. The whole point is brute force CREATIVITY — explore different domains, different asset classes, different signal types.
+   - **Diversify across asset classes**: if recent strategies all trade equities/ETFs, try crypto, forex, or commodities. If they're all US-focused, look at international ETFs.
+3. **Generate a strategy**: come up with a novel, eccentric strategy. Be creative. Cross domains. Combine weird signals. Think about what a bored quant at 2am would try that they'd never pitch to their boss.
+4. **Implement it**: write the strategy file in `strategies/`. Include the full `STRATEGY` dict and `run()` function.
+5. **git commit**: commit the strategy file.
+6. **Run the backtest**: `uv run backtest.py strategies/<name>.py > run.log 2>&1`
+7. **Read results**: extract the metrics from `run.log`.
+8. **If crashed**: read `tail -n 50 run.log` for the traceback. If it's a simple fix (typo, API issue, missing data), fix and re-run. If fundamentally broken, log as crash and move on.
+9. **Log to results.tsv**: record the outcome.
+10. **If winner**: keep the commit, celebrate internally, think about variations — but not more than 2 variations before moving to a completely different idea.
+11. **If not winner**: keep the commit anyway (we want the history), but note the status.
+12. **Evolve**: every 5-10 strategies, look at patterns in results.tsv. What domains/signals appear in winners? Generate variations on winning themes. But also keep throwing wild ideas — the whole point is brute force creativity.
+13. **GOTO 1**
 
 ### Creativity Directives
 

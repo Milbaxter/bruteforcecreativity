@@ -78,7 +78,16 @@ BACKTEST_DAYS = 365
 TIMEOUT_SECONDS = 180  # 3 minute max per backtest
 MIN_TRADES_FOR_WINNER = 8  # Need at least this many round-trip trades
 MAX_AVG_HOLDING_DAYS_FOR_WINNER = 15  # Prefer fast in-and-out
+MAX_DRAWDOWN_FOR_WINNER = -15  # Max drawdown % allowed for winners
 OOS_SPLIT_MONTHS = 3  # Last 3 months are out-of-sample
+
+# Walk-forward validation: additional 12-month windows to test robustness
+# (months_back_start, months_back_end) from today
+WALK_FORWARD_WINDOWS = [
+    (24, 12),  # 2 years ago to 1 year ago
+    (18, 6),   # 18 months ago to 6 months ago
+]
+WALK_FORWARD_MIN_PASS = 2  # Must pass in at least N of 3 windows (including original)
 
 
 # ── Timeout handler ──────────────────────────────────────────────────
@@ -221,17 +230,20 @@ def determine_status(metrics: dict, oos_metrics: dict) -> str:
     oos_pnl = oos_metrics.get("oos_total_pnl", 0)
     oos_trades = oos_metrics.get("oos_num_trades", 0)
 
+    max_dd = metrics["max_drawdown_pct"]
+
     if total_return < 0 or vs_spy < -5:
         status = "loser"
     elif (vs_spy > 0 and sharpe > 1.0 and num_trades >= MIN_TRADES_FOR_WINNER
           and avg_hold <= MAX_AVG_HOLDING_DAYS_FOR_WINNER
+          and max_dd >= MAX_DRAWDOWN_FOR_WINNER
           and oos_trades >= 2 and oos_pnl > 0):
         status = "winner"
     else:
         status = "mediocre"
 
-    logger.info("Status: %s (vs_spy=%.2f sharpe=%.2f trades=%d avg_hold=%.1f oos_trades=%d oos_pnl=%.2f)",
-                status, vs_spy, sharpe, num_trades, avg_hold, oos_trades, oos_pnl)
+    logger.info("Status: %s (vs_spy=%.2f sharpe=%.2f maxdd=%.2f%% trades=%d avg_hold=%.1f oos_trades=%d oos_pnl=%.2f)",
+                status, vs_spy, sharpe, max_dd, num_trades, avg_hold, oos_trades, oos_pnl)
     return status
 
 
@@ -252,9 +264,20 @@ def preload_prices(fetcher: DataFetcher, tickers: list[str], start: str, end: st
     return price_data
 
 
-def run_backtest(strategy_path: str) -> dict:
+def run_backtest(
+    strategy_path: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    quiet: bool = False,
+) -> dict:
     """
     Load and execute a strategy file's run() function with enforced Portfolio.
+
+    Args:
+        strategy_path: path to the strategy .py file
+        start_date: override start date (default: 12 months ago)
+        end_date: override end date (default: today)
+        quiet: if True, skip log file creation (used for walk-forward runs)
 
     Returns dict with strategy metadata + performance metrics.
     """
@@ -276,7 +299,8 @@ def run_backtest(strategy_path: str) -> dict:
     strategy_name = strategy_meta.get("name", path.stem)
 
     # Set up logging for this run
-    setup_logging(strategy_name)
+    if not quiet:
+        setup_logging(strategy_name)
     logger.info("=" * 60)
     logger.info("BACKTEST: %s", strategy_name)
     logger.info("File: %s", strategy_path)
@@ -287,9 +311,11 @@ def run_backtest(strategy_path: str) -> dict:
     fetcher = DataFetcher()
 
     # Backtest period
-    end_date = datetime.now().strftime("%Y-%m-%d")
-    start_date = (datetime.now() - timedelta(days=BACKTEST_DAYS)).strftime("%Y-%m-%d")
-    oos_start = (datetime.now() - timedelta(days=OOS_SPLIT_MONTHS * 30)).strftime("%Y-%m-%d")
+    if end_date is None:
+        end_date = datetime.now().strftime("%Y-%m-%d")
+    if start_date is None:
+        start_date = (datetime.now() - timedelta(days=BACKTEST_DAYS)).strftime("%Y-%m-%d")
+    oos_start = (pd.Timestamp(end_date) - timedelta(days=OOS_SPLIT_MONTHS * 30)).strftime("%Y-%m-%d")
 
     logger.info("Period: %s to %s (OOS from %s)", start_date, end_date, oos_start)
 
@@ -368,6 +394,147 @@ def run_backtest(strategy_path: str) -> dict:
     return result
 
 
+def walk_forward_validate(strategy_path: str) -> dict:
+    """
+    Re-run a winning strategy on additional 12-month windows to confirm robustness.
+
+    Tests the strategy on 2 additional historical windows (plus the original = 3 total).
+    A strategy passes walk-forward if it shows positive edge in at least 2 of 3 windows.
+
+    Walk-forward pass criteria per window (looser than winner criteria):
+        - Positive total return
+        - Sharpe > 0.5
+        - Max drawdown >= -20%
+        - At least 5 trades
+
+    Returns dict with passed (bool), pass_count, and per-window results.
+    """
+    logger.info("=" * 60)
+    logger.info("WALK-FORWARD VALIDATION: %s", strategy_path)
+    logger.info("Testing on %d additional windows...", len(WALK_FORWARD_WINDOWS))
+    logger.info("=" * 60)
+
+    # The original window already passed — count it
+    pass_count = 1
+    window_results = []
+
+    for months_back_start, months_back_end in WALK_FORWARD_WINDOWS:
+        wf_end = (datetime.now() - timedelta(days=months_back_end * 30)).strftime("%Y-%m-%d")
+        wf_start = (datetime.now() - timedelta(days=months_back_start * 30)).strftime("%Y-%m-%d")
+
+        logger.info("Window: %s to %s", wf_start, wf_end)
+
+        try:
+            result = run_backtest(strategy_path, start_date=wf_start, end_date=wf_end, quiet=True)
+
+            passed = (
+                result["total_return_pct"] > 0
+                and result["sharpe_ratio"] > 0.5
+                and result["max_drawdown_pct"] >= -20
+                and result["num_trades"] >= 5
+            )
+
+            if passed:
+                pass_count += 1
+
+            window_results.append({
+                "start": wf_start,
+                "end": wf_end,
+                "total_return_pct": result["total_return_pct"],
+                "sharpe_ratio": result["sharpe_ratio"],
+                "max_drawdown_pct": result["max_drawdown_pct"],
+                "num_trades": result["num_trades"],
+                "status": result["status"],
+                "passed": passed,
+            })
+
+            logger.info("  -> return=%.2f%% sharpe=%.2f maxdd=%.2f%% trades=%d -> %s",
+                        result["total_return_pct"], result["sharpe_ratio"],
+                        result["max_drawdown_pct"], result["num_trades"],
+                        "PASS" if passed else "FAIL")
+
+        except Exception as e:
+            logger.warning("  -> CRASHED: %s", e)
+            window_results.append({
+                "start": wf_start,
+                "end": wf_end,
+                "error": str(e),
+                "passed": False,
+            })
+
+    overall_passed = pass_count >= WALK_FORWARD_MIN_PASS
+
+    logger.info("Walk-forward result: %d/%d windows passed -> %s",
+                pass_count, len(WALK_FORWARD_WINDOWS) + 1,
+                "VALIDATED" if overall_passed else "REJECTED")
+
+    return {
+        "passed": overall_passed,
+        "pass_count": pass_count,
+        "total_windows": len(WALK_FORWARD_WINDOWS) + 1,
+        "windows": window_results,
+    }
+
+
+def promote_winner(strategy_path: str, result: dict, wf_result: dict):
+    """Copy a walk-forward validated winner to the winners/ directory."""
+    import shutil
+
+    winners_dir = Path("winners")
+    winners_dir.mkdir(exist_ok=True)
+
+    src = Path(strategy_path)
+    dst = winners_dir / src.name
+    shutil.copy2(src, dst)
+
+    logger.info("PROMOTED to winners/: %s", src.name)
+
+    # Append to winners summary TSV
+    summary_path = winners_dir / "results.tsv"
+    header = "strategy_name\ttotal_return_pct\tsharpe_ratio\tmax_drawdown_pct\twin_rate_pct\tnum_trades\tavg_holding_days\tvs_spy_pct\toos_pnl\twf_pass_count\twf_total_windows\n"
+
+    if not summary_path.exists():
+        with open(summary_path, "w") as f:
+            f.write(header)
+
+    with open(summary_path, "a") as f:
+        f.write(
+            f"{result['strategy_name']}\t"
+            f"{result['total_return_pct']}\t"
+            f"{result['sharpe_ratio']}\t"
+            f"{result['max_drawdown_pct']}\t"
+            f"{result['win_rate_pct']}\t"
+            f"{result['num_trades']}\t"
+            f"{result['avg_holding_days']}\t"
+            f"{result['vs_spy_pct']}\t"
+            f"{result['oos_total_pnl']}\t"
+            f"{wf_result['pass_count']}\t"
+            f"{wf_result['total_windows']}\n"
+        )
+
+    logger.info("Updated winners/results.tsv")
+
+
+def print_walk_forward_summary(wf_result: dict):
+    """Print walk-forward validation results."""
+    print("\n--- WALK-FORWARD VALIDATION ---")
+    print(f"result:            {'VALIDATED' if wf_result['passed'] else 'REJECTED'}")
+    print(f"windows_passed:    {wf_result['pass_count']}/{wf_result['total_windows']}")
+
+    for i, w in enumerate(wf_result["windows"]):
+        if "error" in w:
+            print(f"  window_{i+1}:  {w['start']} to {w['end']} -> CRASH ({w['error'][:60]})")
+        else:
+            status = "PASS" if w["passed"] else "FAIL"
+            print(f"  window_{i+1}:  {w['start']} to {w['end']} -> {status} "
+                  f"(return={w['total_return_pct']:.1f}% sharpe={w['sharpe_ratio']:.2f} "
+                  f"maxdd={w['max_drawdown_pct']:.1f}% trades={w['num_trades']})")
+
+    if wf_result["passed"]:
+        print(">>> STRATEGY PROMOTED TO winners/ <<<")
+    print("---")
+
+
 def print_summary(result: dict):
     """Print the structured summary block that the agent parses."""
     print("---")
@@ -405,6 +572,24 @@ if __name__ == "__main__":
     try:
         result = run_backtest(strategy_file)
         print_summary(result)
+
+        # Walk-forward validation for winners
+        if result["status"] == "winner":
+            print("\nStrategy passed initial screen — running walk-forward validation...")
+            wf_result = walk_forward_validate(strategy_file)
+            print_walk_forward_summary(wf_result)
+
+            if wf_result["passed"]:
+                promote_winner(strategy_file, result, wf_result)
+                result["walk_forward"] = "validated"
+                result["wf_pass_count"] = wf_result["pass_count"]
+                result["wf_total_windows"] = wf_result["total_windows"]
+            else:
+                # Downgrade to mediocre — didn't survive walk-forward
+                result["status"] = "mediocre"
+                result["walk_forward"] = "rejected"
+                print("\nStrategy DOWNGRADED to mediocre — failed walk-forward validation.")
+
     except BacktestTimeout:
         print("---")
         print("strategy:         TIMEOUT")

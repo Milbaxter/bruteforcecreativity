@@ -8,3 +8,4 @@ Key files:
 - `portfolio.py` — Portfolio class for trade execution (do not modify)
 - `fetch_data.py` — data fetching utilities (do not modify)
 - `strategies/` — where generated strategy files go
+- `winners/` — walk-forward validated strategies auto-promoted here

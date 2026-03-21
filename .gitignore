@@ -1,5 +1,6 @@
 # Experiment artifacts (untracked by design)
 results.tsv
+winners/results.tsv
 run.log
 logs/
 worktrees/
