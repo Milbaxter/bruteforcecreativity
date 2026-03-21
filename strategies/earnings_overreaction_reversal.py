@@ -36,7 +36,8 @@ def run(data_fetcher, portfolio, start_date, end_date):
     if earnings.empty:
         return
 
-    # Filter to our backtest period
+    # Filter to our backtest period (normalize tz to avoid comparison errors)
+    earnings["date"] = pd.to_datetime(earnings["date"], utc=True).dt.tz_localize(None)
     start_dt = pd.Timestamp(start_date)
     end_dt = pd.Timestamp(end_date)
     earnings = earnings[
