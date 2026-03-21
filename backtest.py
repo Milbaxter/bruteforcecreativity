@@ -11,13 +11,14 @@ a structured summary.
 
 Critical properties:
     - Slippage is enforced by the Portfolio, not the strategy
-    - Daily portfolio values are recorded by the engine, not the strategy
+    - Daily portfolio values are reconstructed by replaying events against price data
     - Trade PnL and holding periods are computed by the engine via FIFO matching
     - Volume warnings flag unrealistic fills
     - Minimum trade count required for "winner" status
     - Out-of-sample split: first 9 months in-sample, last 3 months out-of-sample
 """
 
+import logging
 import sys
 import importlib.util
 import signal
@@ -30,6 +31,45 @@ import pandas as pd
 
 from fetch_data import DataFetcher
 from portfolio import Portfolio
+
+# ── Logging setup ────────────────────────────────────────────────────
+
+LOG_DIR = Path("logs")
+LOG_DIR.mkdir(exist_ok=True)
+
+
+def setup_logging(strategy_name: str) -> logging.Logger:
+    """Configure logging for a backtest run. Logs to both file and stderr."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_name = strategy_name.replace(" ", "_").replace("/", "_").lower()
+    log_file = LOG_DIR / f"{timestamp}_{safe_name}.log"
+
+    # Root logger for the bruteforce namespace
+    logger = logging.getLogger("bruteforce")
+    logger.setLevel(logging.DEBUG)
+    logger.handlers.clear()
+
+    # File handler: everything (DEBUG+)
+    fh = logging.FileHandler(log_file)
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s %(name)-28s %(levelname)-5s %(message)s",
+        datefmt="%H:%M:%S",
+    ))
+    logger.addHandler(fh)
+
+    # Stderr handler: warnings and above only (keep terminal output clean)
+    sh = logging.StreamHandler(sys.stderr)
+    sh.setLevel(logging.WARNING)
+    sh.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+    logger.addHandler(sh)
+
+    logger.info("Logging to %s", log_file)
+    return logger
+
+
+logger = logging.getLogger("bruteforce.backtest")
+
 
 # ── Constants ────────────────────────────────────────────────────────
 
@@ -60,10 +100,10 @@ def compute_metrics(
     risk_free_rate: float,
     spy_return_pct: float,
 ) -> dict:
-    """
-    Compute all performance metrics from portfolio values and trade stats.
-    """
+    """Compute all performance metrics from reconstructed daily portfolio values."""
     if not portfolio_values or len(portfolio_values) < 2:
+        logger.warning("Not enough portfolio values to compute metrics (got %d)",
+                        len(portfolio_values) if portfolio_values else 0)
         return {
             "total_return_pct": 0.0,
             "sharpe_ratio": 0.0,
@@ -80,7 +120,6 @@ def compute_metrics(
     dates, values = zip(*portfolio_values)
     values = np.array(values, dtype=float)
 
-    # Total return
     final_value = values[-1]
     total_return_pct = ((final_value - starting_capital) / starting_capital) * 100
 
@@ -88,7 +127,7 @@ def compute_metrics(
     daily_returns = np.diff(values) / values[:-1]
 
     # Sharpe ratio (annualized)
-    if len(daily_returns) > 1 and np.std(daily_returns) > 0:
+    if len(daily_returns) > 1 and np.std(daily_returns) > 1e-10:
         daily_rf = risk_free_rate / 252
         excess_returns = daily_returns - daily_rf
         sharpe_ratio = (np.mean(excess_returns) / np.std(excess_returns)) * np.sqrt(252)
@@ -101,13 +140,16 @@ def compute_metrics(
     max_drawdown_pct = np.min(drawdown) * 100
 
     # Calmar ratio
-    if max_drawdown_pct != 0:
+    if abs(max_drawdown_pct) > 0.01:
         calmar_ratio = total_return_pct / abs(max_drawdown_pct)
     else:
         calmar_ratio = float("inf") if total_return_pct > 0 else 0.0
 
-    # vs SPY
     vs_spy_pct = total_return_pct - spy_return_pct
+
+    logger.info("Metrics: return=%.2f%% sharpe=%.2f maxdd=%.2f%% vs_spy=%.2f%% trades=%d avg_hold=%.1fd",
+                total_return_pct, sharpe_ratio, max_drawdown_pct, vs_spy_pct,
+                trade_stats["num_trades"], trade_stats["avg_holding_days"])
 
     return {
         "total_return_pct": round(total_return_pct, 2),
@@ -132,6 +174,10 @@ def compute_oos_metrics(trades: list[dict], oos_start: str) -> dict:
     wins = [t for t in oos_trades if t.get("pnl", 0) > 0]
     total_pnl = sum(t.get("pnl", 0) for t in oos_trades)
 
+    logger.info("OOS metrics (>= %s): %d trades, %.1f%% win rate, $%.2f PnL",
+                oos_start, len(oos_trades),
+                len(wins) / len(oos_trades) * 100 if oos_trades else 0, total_pnl)
+
     return {
         "oos_num_trades": len(oos_trades),
         "oos_win_rate_pct": round(len(wins) / len(oos_trades) * 100, 1),
@@ -143,6 +189,7 @@ def get_spy_return(fetcher: DataFetcher, start: str, end: str) -> float:
     """Compute SPY buy-and-hold return for the benchmark period."""
     spy = fetcher.get_spy_benchmark(start=start, end=end)
     if spy.empty:
+        logger.warning("SPY benchmark data is empty")
         return 0.0
     if isinstance(spy.columns, pd.MultiIndex):
         close = spy[("Close", "SPY")]
@@ -152,7 +199,9 @@ def get_spy_return(fetcher: DataFetcher, start: str, end: str) -> float:
         return 0.0
     first = close.dropna().iloc[0]
     last = close.dropna().iloc[-1]
-    return ((last - first) / first) * 100
+    ret = ((last - first) / first) * 100
+    logger.info("SPY benchmark: %.2f -> %.2f = %.2f%%", first, last, ret)
+    return ret
 
 
 def determine_status(metrics: dict, oos_metrics: dict) -> str:
@@ -173,18 +222,17 @@ def determine_status(metrics: dict, oos_metrics: dict) -> str:
     oos_trades = oos_metrics.get("oos_num_trades", 0)
 
     if total_return < 0 or vs_spy < -5:
-        return "loser"
+        status = "loser"
+    elif (vs_spy > 0 and sharpe > 1.0 and num_trades >= MIN_TRADES_FOR_WINNER
+          and avg_hold <= MAX_AVG_HOLDING_DAYS_FOR_WINNER
+          and oos_trades >= 2 and oos_pnl > 0):
+        status = "winner"
+    else:
+        status = "mediocre"
 
-    is_winner = (
-        vs_spy > 0
-        and sharpe > 1.0
-        and num_trades >= MIN_TRADES_FOR_WINNER
-        and avg_hold <= MAX_AVG_HOLDING_DAYS_FOR_WINNER
-        and oos_trades >= 2
-        and oos_pnl > 0
-    )
-
-    return "winner" if is_winner else "mediocre"
+    logger.info("Status: %s (vs_spy=%.2f sharpe=%.2f trades=%d avg_hold=%.1f oos_trades=%d oos_pnl=%.2f)",
+                status, vs_spy, sharpe, num_trades, avg_hold, oos_trades, oos_pnl)
+    return status
 
 
 # ── Main runner ──────────────────────────────────────────────────────
@@ -196,23 +244,17 @@ def preload_prices(fetcher: DataFetcher, tickers: list[str], start: str, end: st
         try:
             df = fetcher.get_prices(ticker, start=start, end=end)
             if isinstance(df.columns, pd.MultiIndex):
-                # Flatten for single ticker
                 df.columns = df.columns.get_level_values(0)
             price_data[ticker] = df
-        except Exception:
-            pass  # Ticker not found — strategy will get None from portfolio
+            logger.info("Loaded %d price rows for %s", len(df), ticker)
+        except Exception as e:
+            logger.error("Failed to load prices for %s: %s", ticker, e)
     return price_data
 
 
 def run_backtest(strategy_path: str) -> dict:
     """
     Load and execute a strategy file's run() function with enforced Portfolio.
-
-    The strategy receives:
-        - data_fetcher: DataFetcher instance (for fetching any data)
-        - portfolio: Portfolio instance (for executing trades with enforced slippage)
-        - start_date: str
-        - end_date: str
 
     Returns dict with strategy metadata + performance metrics.
     """
@@ -231,21 +273,35 @@ def run_backtest(strategy_path: str) -> dict:
         raise AttributeError(f"Strategy {path.name} must define a STRATEGY dict")
 
     strategy_meta = module.STRATEGY
+    strategy_name = strategy_meta.get("name", path.stem)
+
+    # Set up logging for this run
+    setup_logging(strategy_name)
+    logger.info("=" * 60)
+    logger.info("BACKTEST: %s", strategy_name)
+    logger.info("File: %s", strategy_path)
+    logger.info("Hypothesis: %s", strategy_meta.get("hypothesis", "N/A"))
+    logger.info("Universe: %s", strategy_meta.get("universe", []))
+    logger.info("=" * 60)
+
     fetcher = DataFetcher()
 
     # Backtest period
     end_date = datetime.now().strftime("%Y-%m-%d")
     start_date = (datetime.now() - timedelta(days=BACKTEST_DAYS)).strftime("%Y-%m-%d")
-
-    # Out-of-sample split date
     oos_start = (datetime.now() - timedelta(days=OOS_SPLIT_MONTHS * 30)).strftime("%Y-%m-%d")
+
+    logger.info("Period: %s to %s (OOS from %s)", start_date, end_date, oos_start)
 
     # Get risk-free rate and SPY benchmark
     risk_free_rate = fetcher.get_risk_free_rate()
     spy_return = get_spy_return(fetcher, start_date, end_date)
+    logger.info("Risk-free rate: %.4f, SPY return: %.2f%%", risk_free_rate, spy_return)
 
     # Pre-load price data for the strategy's universe
     universe = strategy_meta.get("universe", [])
+    if not universe:
+        logger.warning("Strategy declares empty universe — no price data will be preloaded")
     price_data = preload_prices(fetcher, universe, start_date, end_date)
 
     # Create the Portfolio with enforced slippage
@@ -257,25 +313,33 @@ def run_backtest(strategy_path: str) -> dict:
 
     try:
         start_time = time.time()
-        # Strategy uses portfolio.buy() / portfolio.sell() to trade
+        logger.info("Running strategy...")
         module.run(fetcher, portfolio, start_date, end_date)
         elapsed = time.time() - start_time
+        logger.info("Strategy finished in %.1fs", elapsed)
+    except BacktestTimeout:
+        logger.error("Strategy TIMED OUT after %ds", TIMEOUT_SECONDS)
+        raise
+    except Exception as e:
+        logger.error("Strategy CRASHED: %s: %s", type(e).__name__, e, exc_info=True)
+        raise
     finally:
-        signal.alarm(0)  # Cancel timeout
+        signal.alarm(0)
 
-    # Record daily portfolio values across the full period
-    all_dates = set()
-    for ticker, df in price_data.items():
-        for dt in df.index:
-            all_dates.add(dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)[:10])
+    # Reconstruct daily portfolio values by replaying events
+    portfolio_values = portfolio.reconstruct_daily_values()
+    logger.info("Reconstructed %d daily portfolio values", len(portfolio_values))
 
-    for date_str in sorted(all_dates):
-        portfolio.record_daily_value(date_str)
+    if portfolio_values:
+        logger.info("Portfolio: $%.2f -> $%.2f", portfolio_values[0][1], portfolio_values[-1][1])
 
     # Extract metrics
-    portfolio_values = portfolio.get_portfolio_values()
     trade_stats = portfolio.get_trade_stats()
     volume_warnings = portfolio.get_volume_warnings()
+
+    logger.info("Trade stats: %s", trade_stats)
+    if volume_warnings:
+        logger.warning("%d volume warnings", len(volume_warnings))
 
     metrics = compute_metrics(
         portfolio_values=portfolio_values,
@@ -285,14 +349,11 @@ def run_backtest(strategy_path: str) -> dict:
         spy_return_pct=spy_return,
     )
 
-    # Out-of-sample metrics
     oos_metrics = compute_oos_metrics(portfolio.trades, oos_start)
-
-    # Determine status
     status = determine_status(metrics, oos_metrics)
 
-    return {
-        "strategy_name": strategy_meta.get("name", path.stem),
+    result = {
+        "strategy_name": strategy_name,
         "elapsed_seconds": round(elapsed, 1),
         "spy_return_pct": round(spy_return, 2),
         "status": status,
@@ -300,6 +361,11 @@ def run_backtest(strategy_path: str) -> dict:
         **metrics,
         **oos_metrics,
     }
+
+    logger.info("RESULT: %s — %s (return=%.2f%% vs_spy=%+.2f%%)",
+                strategy_name, status, metrics["total_return_pct"], metrics["vs_spy_pct"])
+
+    return result
 
 
 def print_summary(result: dict):

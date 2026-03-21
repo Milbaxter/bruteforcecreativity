@@ -6,6 +6,7 @@ Provides a DataFetcher class that wraps multiple data sources with caching.
 All data is cached to ~/.cache/bruteforcecreativity/ to avoid redundant API calls.
 """
 
+import logging
 import os
 import json
 import hashlib
@@ -20,6 +21,8 @@ import requests
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger("bruteforce.data")
 
 CACHE_DIR = Path.home() / ".cache" / "bruteforcecreativity"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -41,8 +44,11 @@ def _load_cache(key: str, max_age_hours: int = 24):
     if path.exists():
         age = datetime.now().timestamp() - path.stat().st_mtime
         if age < max_age_hours * 3600:
+            logger.debug("Cache HIT: %s (age %.0fs)", key, age)
             with open(path, "rb") as f:
                 return pickle.load(f)
+        else:
+            logger.debug("Cache EXPIRED: %s (age %.0fs > %ds)", key, age, max_age_hours * 3600)
     return None
 
 
@@ -51,6 +57,7 @@ def _save_cache(key: str, data):
     path = CACHE_DIR / f"{key}.pkl"
     with open(path, "wb") as f:
         pickle.dump(data, f)
+    logger.debug("Cache SAVE: %s", key)
 
 
 class DataFetcher:
@@ -176,22 +183,39 @@ class DataFetcher:
 
             fred = Fred(api_key=self.fred_api_key)
             data = fred.get_series(series_id, observation_start=start, observation_end=end)
+            logger.info("FRED %s: %d observations via API key", series_id, len(data))
         else:
-            # Fallback: use FRED's public JSON API (no key needed for basic access)
-            url = (
-                f"https://api.stlouisfed.org/fred/series/observations"
-                f"?series_id={series_id}&api_key=DEMO_KEY"
-                f"&observation_start={start}&observation_end={end}"
-                f"&file_type=json"
-            )
-            resp = requests.get(url, timeout=30)
-            resp.raise_for_status()
-            obs = resp.json().get("observations", [])
-            data = pd.Series(
-                {o["date"]: float(o["value"]) if o["value"] != "." else np.nan for o in obs}
-            )
-            data.index = pd.to_datetime(data.index)
-            data = data.dropna()
+            # No API key — try yfinance as fallback for common series
+            # FRED DEMO_KEY does not work; a real key is needed for direct FRED access
+            logger.warning("No FRED_API_KEY set. Using yfinance fallback for %s. "
+                          "Get a free key at https://fred.stlouisfed.org/docs/api/api_key.html",
+                          series_id)
+
+            # Map common FRED series to yfinance tickers
+            fred_to_yf = {
+                "DFF": "^IRX",        # 13-week T-bill as proxy for fed funds
+                "DTB3": "^IRX",       # 3-month T-bill rate
+                "DGS10": "^TNX",      # 10-year Treasury yield
+                "DGS2": "^FVX",       # 5-year Treasury as proxy for 2-year
+                "VIXCLS": "^VIX",     # VIX
+            }
+
+            yf_ticker = fred_to_yf.get(series_id)
+            if yf_ticker:
+                try:
+                    df = yf.download(yf_ticker, start=start, end=end, progress=False)
+                    if isinstance(df.columns, pd.MultiIndex):
+                        df.columns = df.columns.get_level_values(0)
+                    data = df["Close"].dropna()
+                    logger.info("FRED %s: used yfinance %s fallback (%d rows)",
+                               series_id, yf_ticker, len(data))
+                except Exception as e:
+                    logger.warning("yfinance fallback for %s failed: %s", series_id, e)
+                    data = pd.Series(dtype=float)
+            else:
+                logger.warning("No yfinance fallback for FRED series %s — returning empty. "
+                              "Set FRED_API_KEY in .env for full macro data access.", series_id)
+                data = pd.Series(dtype=float)
 
         _save_cache(key, data)
         return data
@@ -233,6 +257,7 @@ class DataFetcher:
     def get_congressional_trades(self, days_back: int = 365) -> pd.DataFrame:
         """
         Fetch recent congressional stock trades from public APIs.
+        Tries multiple sources in order of reliability.
         Returns DataFrame with columns: date, representative, ticker, type, amount.
         """
         key = _cache_key("congress", days_back=days_back)
@@ -240,17 +265,68 @@ class DataFetcher:
         if cached is not None:
             return cached
 
-        # Use the House Stock Watcher API (public, no key needed)
-        url = "https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json"
-        resp = requests.get(url, timeout=30)
-        resp.raise_for_status()
-        trades = resp.json()
+        df = pd.DataFrame()
 
-        df = pd.DataFrame(trades)
-        if "transaction_date" in df.columns:
-            df["date"] = pd.to_datetime(df["transaction_date"], errors="coerce")
-            cutoff = datetime.now() - timedelta(days=days_back)
-            df = df[df["date"] >= cutoff]
+        # Source 1: CapitolTrades HTML scraping (public, no key needed)
+        try:
+            logger.info("Fetching congressional trades from CapitolTrades...")
+            from bs4 import BeautifulSoup
+            import re
+
+            # Scrape multiple pages
+            all_rows = []
+            for page in range(1, 6):  # First 5 pages
+                url = f"https://www.capitoltrades.com/trades?page={page}"
+                resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+                resp.raise_for_status()
+                soup = BeautifulSoup(resp.text, "html.parser")
+                table_rows = soup.select("tr")[1:]  # Skip header
+
+                if not table_rows:
+                    break
+
+                for row in table_rows:
+                    cells = row.find_all("td")
+                    if len(cells) >= 8:
+                        texts = [c.get_text(strip=True) for c in cells]
+                        # Parse: Politician, Ticker, Published, Traded, Filed After, Owner, Type, Size
+                        politician = texts[0]
+                        asset_text = texts[1]
+                        traded_date = texts[3]
+                        trade_type = texts[6]
+                        size = texts[7]
+
+                        # Extract ticker from asset text (format: "Company NameTICKER:US")
+                        ticker_match = re.search(r'([A-Z]{1,5}):[A-Z]{2}', asset_text)
+                        ticker = ticker_match.group(1) if ticker_match else ""
+
+                        # Parse date (format: "1 Mar2026")
+                        date_match = re.search(r'(\d{1,2}\s+\w{3})(\d{4})', traded_date)
+                        if date_match:
+                            date_str = f"{date_match.group(1)} {date_match.group(2)}"
+                        else:
+                            date_str = traded_date
+
+                        all_rows.append({
+                            "date": date_str,
+                            "representative": politician,
+                            "ticker": ticker,
+                            "type": trade_type,
+                            "amount": size,
+                        })
+
+            if all_rows:
+                df = pd.DataFrame(all_rows)
+                df["date"] = pd.to_datetime(df["date"], format="mixed", errors="coerce")
+                cutoff = datetime.now() - timedelta(days=days_back)
+                df = df[df["date"] >= cutoff]
+                df = df[df["ticker"] != ""]  # Drop entries with no ticker
+                logger.info("Got %d congressional trades from CapitolTrades", len(df))
+        except Exception as e:
+            logger.warning("CapitolTrades scraping failed: %s", e)
+
+        if df.empty:
+            logger.warning("All congressional trade sources failed — returning empty DataFrame")
 
         _save_cache(key, df)
         return df
@@ -352,12 +428,30 @@ class DataFetcher:
     # ── Utility Methods ──────────────────────────────────────────────
 
     def get_risk_free_rate(self) -> float:
-        """Get current risk-free rate (3-month T-bill rate from FRED)."""
+        """Get current risk-free rate (3-month T-bill rate)."""
         try:
             series = self.get_fred_series("DTB3")
-            return series.dropna().iloc[-1] / 100  # Convert from percent
-        except Exception:
-            return 0.05  # Fallback
+            if not series.empty:
+                rate = series.dropna().iloc[-1] / 100  # Convert from percent
+                logger.info("Risk-free rate: %.4f (from DTB3)", rate)
+                return rate
+        except Exception as e:
+            logger.warning("Failed to get DTB3: %s", e)
+
+        # Direct yfinance fallback
+        try:
+            df = yf.download("^IRX", period="5d", progress=False)
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            if not df.empty and "Close" in df.columns:
+                rate = df["Close"].dropna().iloc[-1] / 100
+                logger.info("Risk-free rate: %.4f (from ^IRX yfinance)", rate)
+                return rate
+        except Exception as e:
+            logger.warning("^IRX fallback failed: %s", e)
+
+        logger.warning("Using hardcoded 5%% risk-free rate fallback")
+        return 0.05
 
     def get_spy_benchmark(
         self, start: str | None = None, end: str | None = None

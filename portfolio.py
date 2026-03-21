@@ -12,12 +12,15 @@ Usage in strategies:
         portfolio.sell("AAPL", shares=10, date="2025-03-25")
 """
 
+import logging
 from datetime import datetime
 import math
 
 import numpy as np
 import pandas as pd
 
+
+logger = logging.getLogger("bruteforce.portfolio")
 
 SLIPPAGE_PCT = 0.001  # 0.1% slippage applied to every trade
 
@@ -28,6 +31,11 @@ class Portfolio:
 
     The backtest engine creates this and passes it to strategies.
     Strategies call buy()/sell(). The engine extracts metrics afterward.
+
+    Daily portfolio values are reconstructed after the strategy finishes
+    by replaying all events (buys, sells) chronologically against the
+    price series. This avoids the bug where values are only captured
+    in the final state.
     """
 
     def __init__(self, starting_capital: float, price_data: dict[str, pd.DataFrame]):
@@ -41,26 +49,24 @@ class Portfolio:
         self.cash = starting_capital
         self.positions: dict[str, int] = {}  # ticker -> shares held
         self.price_data = price_data  # ticker -> OHLCV DataFrame
-        self.trades: list[dict] = []  # completed round-trip trades
+        self.trades: list[dict] = []  # completed round-trip (sell) trades
         self._open_trades: dict[str, list[dict]] = {}  # ticker -> list of open buy records
-        self._daily_values: dict[str, float] = {}  # date_str -> portfolio value
-        self._all_dates: set[str] = set()
+        self._all_events: list[dict] = []  # chronological log of ALL buys and sells
+        self._volume_warnings: list[str] = []
 
-        # Collect all trading dates from price data
-        for ticker, df in price_data.items():
-            for dt in df.index:
-                date_str = dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)[:10]
-                self._all_dates.add(date_str)
+        logger.debug("Portfolio initialized with $%.2f capital, %d tickers loaded",
+                      starting_capital, len(price_data))
 
     def _get_price(self, ticker: str, date: str) -> float | None:
         """Look up the close price for a ticker on a given date."""
         if ticker not in self.price_data:
+            logger.warning("No price data for ticker %s", ticker)
             return None
         df = self.price_data[ticker]
-        # Find the closest date on or before the requested date
         target = pd.Timestamp(date)
         mask = df.index <= target
         if not mask.any():
+            logger.warning("No price data for %s on or before %s", ticker, date)
             return None
         row = df.loc[mask].iloc[-1]
         if "Close" in df.columns:
@@ -99,6 +105,7 @@ class Portfolio:
 
         price = self._get_price(ticker, date)
         if price is None or price <= 0:
+            logger.warning("BUY %s failed on %s: no valid price", ticker, date)
             return None
 
         # Apply slippage (buy at slightly higher price)
@@ -108,21 +115,28 @@ class Portfolio:
         if dollars > 0:
             shares = math.floor(dollars / exec_price)
         if shares <= 0:
+            logger.warning("BUY %s failed on %s: 0 shares (price=%.2f, dollars=%.2f)",
+                           ticker, date, price, dollars)
             return None
 
         cost = shares * exec_price
         if cost > self.cash:
-            # Buy what we can afford
             shares = math.floor(self.cash / exec_price)
             if shares <= 0:
+                logger.warning("BUY %s failed on %s: insufficient cash ($%.2f)",
+                               ticker, date, self.cash)
                 return None
             cost = shares * exec_price
 
-        # Volume check: warn but don't block (logged for metrics)
+        # Volume check
         volume = self._get_volume(ticker, date)
         volume_pct = None
         if volume and volume > 0:
             volume_pct = (shares / volume) * 100
+            if volume_pct > 1.0:
+                warn = f"{date} {ticker}: BUY was {volume_pct:.1f}% of daily volume"
+                self._volume_warnings.append(warn)
+                logger.warning("Volume warning: %s", warn)
 
         self.cash -= cost
         self.positions[ticker] = self.positions.get(ticker, 0) + shares
@@ -141,7 +155,13 @@ class Portfolio:
         # Track open position for round-trip matching
         if ticker not in self._open_trades:
             self._open_trades[ticker] = []
-        self._open_trades[ticker].append(record)
+        self._open_trades[ticker].append({**record, "shares": shares})  # copy with original shares
+
+        # Log event for daily value reconstruction
+        self._all_events.append(record)
+
+        logger.info("BUY  %4d x %-6s @ $%.2f (exec $%.2f) on %s | cash=$%.2f",
+                     shares, ticker, price, exec_price, date, self.cash)
 
         return record
 
@@ -163,6 +183,7 @@ class Portfolio:
 
         held = self.positions.get(ticker, 0)
         if held <= 0:
+            logger.warning("SELL %s failed on %s: no position held", ticker, date)
             return None
 
         if all_shares:
@@ -174,6 +195,7 @@ class Portfolio:
 
         price = self._get_price(ticker, date)
         if price is None or price <= 0:
+            logger.warning("SELL %s failed on %s: no valid price", ticker, date)
             return None
 
         # Apply slippage (sell at slightly lower price)
@@ -199,7 +221,6 @@ class Portfolio:
                 exit_proceeds = matched * exec_price
                 pnl += exit_proceeds - entry_cost
 
-                # Holding period in calendar days
                 try:
                     entry_date = datetime.strptime(open_trade["date"], "%Y-%m-%d")
                     exit_date = datetime.strptime(date, "%Y-%m-%d")
@@ -225,29 +246,73 @@ class Portfolio:
         }
 
         self.trades.append(record)
+        self._all_events.append(record)
+
+        logger.info("SELL %4d x %-6s @ $%.2f (exec $%.2f) on %s | pnl=$%.2f hold=%dd | cash=$%.2f",
+                     shares, ticker, price, exec_price, date, pnl, holding_days, self.cash)
+
         return record
 
-    def record_daily_value(self, date: str):
+    def reconstruct_daily_values(self) -> list[tuple[str, float]]:
         """
-        Snapshot the total portfolio value on a given date.
-        Called by the backtest engine, not by strategies.
-        """
-        total = self.cash
-        for ticker, shares in self.positions.items():
-            price = self._get_price(ticker, date)
-            if price:
-                total += shares * price
-        self._daily_values[date] = total
+        Reconstruct daily portfolio values by replaying all events chronologically
+        against the price series.
 
-    def get_portfolio_values(self) -> list[tuple[str, float]]:
-        """Return sorted daily portfolio values as (date, value) list."""
-        return sorted(self._daily_values.items(), key=lambda x: x[0])
+        This is called by the backtest engine AFTER the strategy finishes.
+        It replays buys/sells in date order and marks-to-market on every trading day.
+        """
+        # Collect all unique trading dates from price data
+        all_dates: set[str] = set()
+        for ticker, df in self.price_data.items():
+            for dt in df.index:
+                all_dates.add(dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)[:10])
+        trading_days = sorted(all_dates)
+
+        if not trading_days:
+            logger.warning("No trading days found in price data — cannot reconstruct values")
+            return []
+
+        # Index events by date
+        events_by_date: dict[str, list[dict]] = {}
+        for evt in self._all_events:
+            d = evt["date"]
+            if d not in events_by_date:
+                events_by_date[d] = []
+            events_by_date[d].append(evt)
+
+        # Replay
+        sim_cash = self.starting_capital
+        sim_positions: dict[str, int] = {}  # ticker -> shares
+        daily_values: list[tuple[str, float]] = []
+
+        for day in trading_days:
+            # Apply any events on this day
+            if day in events_by_date:
+                for evt in events_by_date[day]:
+                    if evt["action"] == "BUY":
+                        sim_cash -= evt["cost"]
+                        sim_positions[evt["ticker"]] = sim_positions.get(evt["ticker"], 0) + evt["shares"]
+                    elif evt["action"] == "SELL":
+                        sim_cash += evt["proceeds"]
+                        sim_positions[evt["ticker"]] = sim_positions.get(evt["ticker"], 0) - evt["shares"]
+                        if sim_positions[evt["ticker"]] <= 0:
+                            del sim_positions[evt["ticker"]]
+
+            # Mark to market
+            total = sim_cash
+            for ticker, shares in sim_positions.items():
+                price = self._get_price(ticker, day)
+                if price:
+                    total += shares * price
+            daily_values.append((day, round(total, 2)))
+
+        logger.debug("Reconstructed %d daily portfolio values", len(daily_values))
+        return daily_values
 
     def get_final_value(self) -> float:
         """Current portfolio value (cash + positions at last known price)."""
         total = self.cash
         for ticker, shares in self.positions.items():
-            # Use the most recent price
             if ticker in self.price_data:
                 df = self.price_data[ticker]
                 if not df.empty and "Close" in df.columns:
@@ -284,11 +349,4 @@ class Portfolio:
 
     def get_volume_warnings(self) -> list[str]:
         """Return warnings for trades that exceeded 1% of daily volume."""
-        warnings = []
-        for t in self._open_trades.values():
-            for trade in t:
-                if trade.get("volume_pct") and trade["volume_pct"] > 1.0:
-                    warnings.append(
-                        f"{trade['date']} {trade['ticker']}: trade was {trade['volume_pct']:.1f}% of daily volume"
-                    )
-        return warnings
+        return self._volume_warnings
