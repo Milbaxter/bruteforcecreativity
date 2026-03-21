@@ -1,0 +1,28 @@
+# Experiment artifacts (untracked by design)
+results.tsv
+run.log
+worktrees/
+
+# Environment
+.env
+.env.local
+
+# Data cache
+data_cache/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

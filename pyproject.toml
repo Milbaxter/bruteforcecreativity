@@ -1,0 +1,16 @@
+[project]
+name = "bruteforcecreativity"
+version = "0.1.0"
+description = "Autonomous eccentric investment strategy discovery engine"
+requires-python = ">=3.11"
+dependencies = [
+    "yfinance>=0.2.36",
+    "pandas>=2.2.0",
+    "numpy>=1.26.0",
+    "pytrends>=4.9.0",
+    "fredapi>=0.5.2",
+    "requests>=2.31.0",
+    "beautifulsoup4>=4.12.0",
+    "python-dotenv>=1.0.0",
+    "scipy>=1.12.0",
+]
