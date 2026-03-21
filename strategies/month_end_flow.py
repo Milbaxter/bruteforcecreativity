@@ -46,11 +46,9 @@ def run(data_fetcher, portfolio, start_date, end_date):
         return
 
     # Group trading days by month
-    td_series = pd.Series(trading_days)
-    td_dates = pd.to_datetime(td_series)
-
-    # For each month, find the last N trading days and first N of next month
-    months = td_dates.to_period("M").unique()
+    td_dates = pd.DatetimeIndex(trading_days)
+    td_periods = td_dates.to_period("M")
+    months = td_periods.unique()
 
     in_position = False
     ENTRY_DAYS_BEFORE_END = 3  # enter 3 trading days before month-end
@@ -58,8 +56,8 @@ def run(data_fetcher, portfolio, start_date, end_date):
 
     for i, month in enumerate(months):
         # Get trading days in this month
-        month_mask = td_dates.to_period("M") == month
-        month_days = td_series[month_mask].tolist()
+        month_mask = td_periods == month
+        month_days = [d.strftime("%Y-%m-%d") for d in td_dates[month_mask]]
 
         if len(month_days) < ENTRY_DAYS_BEFORE_END + 1:
             continue
@@ -82,8 +80,8 @@ def run(data_fetcher, portfolio, start_date, end_date):
         # Exit: 2nd trading day of next month
         if in_position and i + 1 < len(months):
             next_month = months[i + 1]
-            next_month_mask = td_dates.to_period("M") == next_month
-            next_month_days = td_series[next_month_mask].tolist()
+            next_month_mask = td_periods == next_month
+            next_month_days = [d.strftime("%Y-%m-%d") for d in td_dates[next_month_mask]]
 
             if len(next_month_days) >= EXIT_DAYS_INTO_NEW:
                 exit_day = next_month_days[EXIT_DAYS_INTO_NEW - 1]
