@@ -281,23 +281,16 @@ The experiment runs on a dedicated branch (e.g. `run/mar21`).
 
 **LOOP FOREVER:**
 
-1. **Review state**: check `results.tsv` to see what's been tried, what worked, what didn't. Look at the current best strategies for inspiration.
-2. **Diversity check (MANDATORY)**: before generating, look at the last 3 strategies in `results.tsv`. If they share the same core signal type or universe (e.g., all rotate GLD/QQQ/XLE, or all use momentum on the same ETFs), you MUST use a completely different data source and signal for the next strategy. Specifically:
-   - **No more than 3 strategies in a row** with the same universe or signal type. If the last 3 all traded the same tickers or used the same indicator, break the pattern.
-   - **Every 5th strategy MUST use an alternative data source**: Wikipedia pageviews, weather (Open-Meteo), crypto fear/greed index, congressional trades, insider trades, Google Trends, or earnings calendar. Not just price/volume data.
-   - **Penalize repetition**: if you catch yourself generating "X Rotation v3" or "Y Momentum with different parameters", STOP. That's parameter optimization, not creativity. The whole point is brute force CREATIVITY — explore different domains, different asset classes, different signal types.
-   - **Diversify across asset classes**: if recent strategies all trade equities/ETFs, try crypto, forex, or commodities. If they're all US-focused, look at international ETFs.
-3. **Generate a strategy**: come up with a novel, eccentric strategy. Be creative. Cross domains. Combine weird signals. Think about what a bored quant at 2am would try that they'd never pitch to their boss.
-4. **Implement it**: write the strategy file in `strategies/`. Include the full `STRATEGY` dict and `run()` function.
-5. **git commit**: commit the strategy file.
-6. **Run the backtest**: `uv run backtest.py strategies/<name>.py > run.log 2>&1`
-7. **Read results**: extract the metrics from `run.log`.
-8. **If crashed**: read `tail -n 50 run.log` for the traceback. If it's a simple fix (typo, API issue, missing data), fix and re-run. If fundamentally broken, log as crash and move on.
-9. **Log to results.tsv**: record the outcome.
-10. **If winner**: keep the commit, celebrate internally, think about variations — but not more than 2 variations before moving to a completely different idea.
-11. **If not winner**: keep the commit anyway (we want the history), but note the status.
-12. **Evolve**: every 5-10 strategies, look at patterns in results.tsv. What domains/signals appear in winners? Generate variations on winning themes. But also keep throwing wild ideas — the whole point is brute force creativity.
-13. **GOTO 1**
+1. **Check what's been tried**: quickly scan `results.tsv` ONLY to avoid duplicating a strategy that already exists. Do NOT look at winners for "inspiration" — that leads to riffing on the same idea with different parameters, which is exactly what we don't want. The goal is to discover NEW kinds of winners, not optimize old ones.
+2. **Generate a completely new strategy**: every single strategy must be a fresh, novel hypothesis. Different data sources, different asset classes, different logic from anything already in results.tsv. If your idea resembles anything already tested — even vaguely — throw it out and think harder. No "v2", no variations, no parameter tweaks. FRESH IDEAS ONLY.
+3. **Implement it**: write the strategy file in `strategies/`. Include the full `STRATEGY` dict and `run()` function.
+4. **git commit**: commit the strategy file.
+5. **Run the backtest**: `uv run backtest.py strategies/<name>.py > run.log 2>&1`
+6. **Read results**: extract the metrics from `run.log`.
+7. **If crashed**: read `tail -n 50 run.log` for the traceback. If it's a simple fix (typo, API issue, missing data), fix and re-run. If fundamentally broken, log as crash and move on.
+8. **Log to results.tsv**: record the outcome.
+9. **Move on immediately**: do not dwell on results. Do not generate variations. Do not "evolve" a winner. Just log it and generate the next completely different idea. The brute force IS the method — volume of diverse ideas, not depth on any single one.
+10. **GOTO 1**
 
 ### Creativity Directives
 
