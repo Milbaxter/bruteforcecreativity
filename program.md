@@ -308,14 +308,35 @@ When generating strategies, draw from these idea wells:
 
 All strategies should be **fast in, fast out** (1-10 day holds). Think swing trades, not investments.
 
-- **Cross-domain signals**: weather + commodities (use Open-Meteo!), Wikipedia attention spikes + stock moves, crypto fear/greed + BTC entries, sports outcomes + regional stocks, election polls + sector rotation, TikTok trends + consumer stocks
-- **Temporal anomalies**: day-of-week effects, month-end rebalancing flows, options expiration pinning, earnings whisper momentum, post-holiday drift
-- **Behavioral exploits**: retail panic selling (buy the VIX spike), meme stock lifecycle patterns, IPO lockup expiry dumps, earnings overreaction reversal
-- **Copycat strategies**: follow insiders, follow congress, inverse Cramer, follow 13F filings with a quick momentum burst
-- **Prediction market arbitrage**: Polymarket probabilities vs equity implied odds
-- **Mean reversion snaps**: gap fills, oversold bounces after panic days, sector rotation whiplash
-- **Event-driven**: FOMC day patterns, CPI release reactions, jobs report fade, crypto halving proximity effects
-- **Microstructure**: unusual options volume, dark pool prints, short interest spikes combined with catalysts
+#### COMBO STRATEGIES (the default — single-signal strategies are discouraged)
+
+**Every strategy should combine 2-3 uncorrelated signals into one entry condition.** Single-signal strategies (just momentum, just mean reversion, just one indicator) are too simple — they're what every quant screen already runs. The edge comes from combining signals that nobody else is combining because they come from different domains.
+
+Examples of good combo entries:
+- Congressional buy disclosure + stock has positive 5-day momentum + short interest < 5% → BUY
+- Wikipedia pageview spike > 2 standard deviations + insider cluster buy in past 10 days + price above 20-day MA → BUY
+- Crypto Fear & Greed < 20 (extreme fear) + BTC above 200-day MA + weekend (lower liquidity) → BUY BTC
+- Extreme cold weather in Houston (Open-Meteo) + natural gas ETF (UNG) dropped > 3% in past 5 days + VIX > 20 → BUY UNG
+- Earnings beat > 5% + Google Trends for company name rising + stock pulled back > 2% from post-earnings high → BUY
+- FOMC announcement day + VIX > 25 + SPY below 10-day MA → BUY SPY (fear + event + oversold)
+
+The pattern: **domain signal (WHY to look) + momentum/mean-reversion filter (WHEN to enter) + risk filter (WHEN NOT to enter)**. Three signals, three different data sources, one entry.
+
+**If you catch yourself writing a strategy with only one entry condition, STOP and add at least one more uncorrelated signal.** Two signals minimum, three preferred.
+
+#### Idea Wells
+
+Think WEIRD. Think niche. Think "what would a curious person with $50K and too much free time try that a hedge fund never would?"
+
+- **Cross-domain combos**: weather extremes + energy/agriculture ETFs + momentum confirmation. Wikipedia attention spikes + stock pullback + insider buying. Crypto sentiment + on-chain signals + weekend timing. Google Trends for disease keywords + pharma stocks + earnings proximity.
+- **Temporal anomalies + confirmation**: day-of-week effects + volume confirmation + VIX regime. Month-end rebalancing flows + sector strength + short interest. Options expiration week + unusual volume + price compression. Post-holiday drift + momentum + retail attention.
+- **Behavioral exploits + filters**: retail panic selling (VIX spike) + stock is above 200-day MA (healthy stock in temporary fear). Meme stock lifecycle (Reddit attention spike) + low short interest (squeeze potential) + positive earnings surprise. IPO lockup expiry + insider NOT selling (confidence signal) + sector tailwind.
+- **Copycat combos**: congressional buy + momentum + low short interest. Insider cluster buys (3+ insiders in 30 days) + positive earnings trend + pullback entry. 13F filing copycat + stock under $10B market cap (too small for the fund to fully load) + positive momentum.
+- **Event-driven combos**: FOMC day + VIX level + prior day's price action. CPI release + bond yield direction + equity sector rotation. Jobs report + wage data direction + consumer sector ETF momentum.
+- **Crypto-specific**: crypto fear/greed index + Bitcoin dominance ratio + weekend timing. Altcoin volume spike + Bitcoin stable + Google Trends for the coin. Ethereum gas fees dropping + DeFi token pullback + crypto sentiment turning.
+- **Really weird ones**: full moon + VIX percentile + gold momentum (superstition arbitrage). Tax loss selling season (December) + beaten-down small caps + insider buying. Natural disaster (extreme weather) + insurance stock reaction + mean reversion. Super Bowl winner (AFC vs NFC) + market direction (yes, this is a real anomaly people have studied). Congressional trading in defense stocks + geopolitical tension proxy + momentum.
+
+**The weirder the combo, the less likely an institution is already running it. That's the edge.**
 
 ### Timeout and Error Handling
 
