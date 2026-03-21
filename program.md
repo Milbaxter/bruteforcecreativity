@@ -321,17 +321,50 @@ The pattern: **domain signal (WHY to look) + momentum/mean-reversion filter (WHE
 
 **If you catch yourself writing a strategy with only one entry condition, STOP and add at least one more uncorrelated signal.** Two signals minimum, three preferred.
 
-#### Idea Wells
+#### BANNED STRATEGIES (do NOT generate these — already explored, no more edge to find)
 
-Think WEIRD. Think niche. Think "what would a curious person with $50K and too much free time try that a hedge fund never would?"
+The loop has already tested 50+ strategies. These categories are EXHAUSTED — do not generate more of them:
+- **GLD/QQQ/XLE momentum rotation** — done to death. Triple Momentum, Oil Gold Macro, Gold Silver, Precious Metals. Stop. No more gold rotation strategies. Period.
+- **Simple ETF pullback/dip buying** — Pullback Sniper, Dual Index Pullback, Multi-Asset Pullback. Covered.
+- **Fear/greed regime allocation** — Fear Greed Regime v1 and v2 exist. Move on.
+- **Single-indicator strategies** — pure momentum, pure mean reversion, pure VIX signal. Too basic.
+- **Vanilla event-driven** — FOMC drift, earnings reversal, gap down reversal. All tested, all lost.
 
-- **Cross-domain combos**: weather extremes + energy/agriculture ETFs + momentum confirmation. Wikipedia attention spikes + stock pullback + insider buying. Crypto sentiment + on-chain signals + weekend timing. Google Trends for disease keywords + pharma stocks + earnings proximity.
-- **Temporal anomalies + confirmation**: day-of-week effects + volume confirmation + VIX regime. Month-end rebalancing flows + sector strength + short interest. Options expiration week + unusual volume + price compression. Post-holiday drift + momentum + retail attention.
-- **Behavioral exploits + filters**: retail panic selling (VIX spike) + stock is above 200-day MA (healthy stock in temporary fear). Meme stock lifecycle (Reddit attention spike) + low short interest (squeeze potential) + positive earnings surprise. IPO lockup expiry + insider NOT selling (confidence signal) + sector tailwind.
-- **Copycat combos**: congressional buy + momentum + low short interest. 13F filing copycat + stock under $10B market cap (too small for the fund to fully load) + positive momentum.
-- **Event-driven combos**: FOMC day + VIX level + prior day's price action. CPI release + bond yield direction + equity sector rotation. Jobs report + wage data direction + consumer sector ETF momentum.
-- **Crypto-specific**: crypto fear/greed index + Bitcoin dominance ratio + weekend timing. Altcoin volume spike + Bitcoin stable + Google Trends for the coin. Ethereum gas fees dropping + DeFi token pullback + crypto sentiment turning.
-- **Really weird ones**: full moon + VIX percentile + gold momentum (superstition arbitrage). Tax loss selling season (December) + beaten-down small caps + insider buying. Natural disaster (extreme weather) + insurance stock reaction + mean reversion. Super Bowl winner (AFC vs NFC) + market direction (yes, this is a real anomaly people have studied). Congressional trading in defense stocks + geopolitical tension proxy + momentum.
+If your strategy is basically "rotate between 3 ETFs based on momentum" — STOP. That's been done. Think harder.
+
+#### Idea Wells — Think Like a Weirdo
+
+The strategies that will actually make money at small scale are the ones nobody else is running because they sound absurd, involve obscure data, or cross domains that don't belong together. **Lean into the absurdity.** If your hypothesis doesn't make a quant raise an eyebrow, it's not weird enough.
+
+**CONCRETE WEIRD HYPOTHESES TO TEST** (these are starting points, not an exhaustive list — riff on them, mutate them, invert them):
+
+1. **Wikipedia Death Spike Trade**: when a CEO/founder's Wikipedia page views spike 10x+ (health scare? scandal? death?), the stock often overreacts. Buy the dip 2 days after the spike if the company is fundamentally healthy (market cap > $10B). Use `get_wikipedia_pageviews()` + price pullback + fundamentals filter.
+
+2. **Freeze-Burn Nat Gas**: when Houston/Chicago temperatures hit extreme cold (<10°F) or extreme heat (>100°F) for 3+ consecutive days, natural gas demand spikes but UNG often hasn't moved yet. Buy UNG on weather extreme + price hasn't moved >2% yet (market hasn't priced it in). Use `get_weather_history()` + UNG price + lagged entry.
+
+3. **Crypto Capitulation Bounce**: when crypto fear/greed hits single digits (<10, "extreme fear") AND Bitcoin's 7-day RSI is below 30 AND it's a weekend (thin liquidity = bigger bounce potential). Buy BTC-USD, sell Tuesday. Use `get_crypto_fear_greed()` + price technicals + day-of-week.
+
+4. **Congressional Defense Ramp**: when congress members buy defense stocks (RTX, LMT, NOC, GD) — they often know about upcoming contracts/budgets. Buy the same stock within 5 days if momentum is positive. Use `get_congressional_trades()` filtered to defense tickers + momentum confirmation.
+
+5. **Attention Arbitrage**: when Wikipedia pageviews for a stock spike BUT Google Trends for the same term haven't spiked yet (Wikipedia leads, Google lags because Wikipedia = informed attention, Google = retail FOMO). Buy before the retail wave hits. Use `get_wikipedia_pageviews()` + `get_google_trends()` divergence + price above MA.
+
+6. **Storm Chaser**: when Open-Meteo shows a major precipitation/wind event in the Gulf Coast AND oil hasn't spiked yet, buy XLE/USO anticipating supply disruption pricing. The weather data is free and real-time — the market often takes 1-2 days to react to weather. Use `get_weather_history()` for Gulf Coast + XLE price lag.
+
+7. **CPI Surprise Fade**: CPI release dates are known. When CPI comes in hot (above forecast) markets dump same-day. But the dump reverses within 3-5 days because the Fed doesn't actually change policy that fast. Buy SPY/QQQ on CPI hot day close + sell 5 days later. Use `get_economic_calendar()` + FRED CPI data + price action.
+
+8. **Altcoin Rotation on BTC Stability**: when Bitcoin is flat (±1% for 5+ days) but altcoin volume on CoinGecko is spiking, money is rotating into alts. Buy the top-volume altcoin (ETH, SOL) via yfinance. Use `get_coingecko_market_data()` volume spike + BTC stability check.
+
+9. **Earnings Whisper Drift**: when a stock beats earnings by >5% surprise AND Wikipedia pageviews for that company are rising (sustained attention, not just one-day spike), the post-earnings drift continues for 5-10 more days. Buy day 2 after earnings, sell day 7. Use `get_earnings_calendar()` + `get_wikipedia_pageviews()` + earnings surprise filter.
+
+10. **Friday Afternoon Panic Fade**: when markets drop >1% on a Friday afternoon (fear of weekend risk), buy at close. Monday tends to gap up because the weekend risk was priced in too aggressively. Add VIX > 20 filter (only when there's actual fear). Use day-of-week + intraday price change + VIX level.
+
+11. **Weather-Agriculture Lag**: when Midwest temperatures are extreme (drought conditions or early frost from Open-Meteo) AND agriculture ETFs (WEAT, CORN) haven't moved yet, buy anticipating supply concern pricing. Weather data leads commodity prices by days. Use `get_weather_history()` for Iowa/Illinois + WEAT/CORN price.
+
+12. **Crypto-Equity Divergence**: when BTC-USD rallies >5% in a week but crypto-adjacent equities (COIN, MARA, MSTR) lag behind by >3%, buy the equities. They catch up within 3-5 days. Use crypto price + equity price divergence + volume confirmation.
+
+**Inversion trick**: if a hypothesis loses money, try the EXACT OPPOSITE. "Buy on Wikipedia spikes" lost? Try "short on Wikipedia spikes" or "buy when Wikipedia pageviews are unusually LOW for a stock that's been rising (stealth rally, no attention = room to run)."
+
+**Mutation trick**: take a losing strategy's signal and combine it with a winning strategy's exit logic, or vice versa. Mix and match components from different experiments.
 
 **The weirder the combo, the less likely an institution is already running it. That's the edge.**
 
