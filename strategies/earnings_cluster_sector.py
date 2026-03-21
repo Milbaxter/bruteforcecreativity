@@ -119,7 +119,8 @@ def run(data_fetcher, portfolio, start_date, end_date):
                 for _, row in earnings.iterrows():
                     if pd.notna(row.get("date")) and pd.notna(row.get("ticker")):
                         if row["ticker"] in tickers:
-                            if current_date - lookback <= row["date"] <= current_date:
+                            row_date = row["date"].tz_localize(None) if hasattr(row["date"], 'tz') and row["date"].tz else row["date"]
+                            if current_date - lookback <= row_date <= current_date:
                                 surprise = row.get("surprise", row.get("eps_surprise", 0))
                                 if pd.notna(surprise) and float(surprise) > 3:
                                     beats += 1
