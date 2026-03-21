@@ -1,6 +1,18 @@
 # bruteforcecreativity
 
-An autonomous loop that generates eccentric investment strategies, backtests them against real market data, and surfaces the ones that actually work. The premise: every obvious strategy is already being run by firms with billions in capital. The edge for small players is in ideas too weird for institutional risk committees to approve.
+An autonomous loop that generates eccentric investment strategies, backtests them against real market data, and surfaces the ones that actually work.
+
+## The Core Thesis
+
+Every obvious strategy is already being run by firms with billions in capital and teams of PhDs. You cannot beat them at their game. But here's the thing: **they literally cannot play small**. A $50B fund cannot deploy a strategy that only works at $10K-$100K scale — the returns don't move their needle, the positions are too small for their compliance overhead, and the markets they'd trade in are too illiquid for institutional size.
+
+This is the edge: **niche, eccentric, small-scale, repeatable patterns** that fly under the institutional radar. We're not looking for one big trade. We're looking for many small, weird, repeatable things — the kind of strategies a curious individual investor could actually execute with $10K-$100K. Things like:
+- A pattern that works in microcap stocks too illiquid for funds to touch
+- A cross-domain signal (weather + energy stocks) too silly for a risk committee to approve
+- A behavioral exploit in prediction markets too small for prop desks to care about
+- A congressional copycat trade that would be a PR nightmare for a named fund
+
+The loop generates hundreds of these, tests them, and surfaces the ones that actually show repeatable edge. You don't need one strategy that returns 50%. You need ten strategies that each reliably return 8-15% in their niche, deployed with small capital across different uncorrelated bets.
 
 ## Setup
 
@@ -54,15 +66,17 @@ Each iteration, you generate ONE novel investment strategy. A strategy must incl
 3. **Universe**: what instruments does it trade? (specific stocks, ETFs, sectors, crypto, prediction markets, etc.)
 4. **Entry signal**: precise conditions for entering a position.
 5. **Exit signal**: precise conditions for exiting (take-profit, stop-loss, time-based, signal reversal).
-6. **Position sizing**: how much capital per trade. Assume $10,000 starting capital.
-7. **Eccentricity factor**: what makes this weird? Why wouldn't a big fund do this?
+6. **Position sizing**: how much capital per trade. Assume $10,000-$100,000 starting capital. Strategies should work at this scale.
+7. **Eccentricity factor**: what makes this weird? Why wouldn't a big fund do this? Why does it only work at small scale?
+8. **Repeatability**: is this a one-off or does the pattern recur? We want strategies we can run again and again, not one-time events.
 
 ### What Makes a Good Strategy
 
 - **Eccentric**: crosses domains (weather + energy, congressional trades + options, Google Trends + crypto). Combines signals that institutional quants wouldn't put in the same model.
 - **Specific**: not "buy low sell high" — specific ticker selection logic, specific indicators, specific thresholds.
 - **Testable**: can be backtested with available data. No strategies that require data you can't access.
-- **Small-capital friendly**: works with $10K. No strategies that require massive positions to move markets or get fills.
+- **Small-capital friendly**: works with $10K-$100K. No strategies that require massive positions to move markets or get fills. Ideally trades in markets or instruments too small for institutional players.
+- **Repeatable**: the pattern should recur — not a one-time event. We want strategies we can deploy month after month. A strategy that only fired once in 12 months is useless even if that one trade was amazing.
 - **Novel across the run**: don't repeat strategies. Check `results.tsv` to see what's been tried. Riff on winners but don't duplicate.
 
 ### What to Avoid
