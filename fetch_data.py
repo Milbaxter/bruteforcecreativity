@@ -337,41 +337,6 @@ class DataFetcher:
         _save_cache(key, df)
         return df
 
-    # ── Insider Trading ──────────────────────────────────────────────
-
-    def get_insider_trades(self, ticker: str | None = None) -> pd.DataFrame:
-        """
-        Fetch insider trading data from SEC EDGAR / OpenInsider.
-        If ticker is None, returns recent cluster buys across all stocks.
-        """
-        key = _cache_key("insider", ticker=ticker or "all")
-        cached = _load_cache(key, self.cache_hours)
-        if cached is not None:
-            return cached
-
-        if ticker:
-            url = f"http://openinsider.com/screener?s={ticker}&o=&pl=&ph=&st=0&lt=1&lk=&cnt=100&oc=&sortcol=0&cnt=100&page=1"
-        else:
-            # Cluster buys in last 30 days
-            url = "http://openinsider.com/screener?s=&o=&pl=&ph=&st=0&lt=1&lk=&cnt=100&oc=&sortcol=0&cnt=100&page=1"
-
-        try:
-            resp = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
-            resp.raise_for_status()
-            from bs4 import BeautifulSoup
-
-            soup = BeautifulSoup(resp.text, "html.parser")
-            table = soup.find("table", {"class": "tinytable"})
-            if table:
-                df = pd.read_html(str(table))[0]
-            else:
-                df = pd.DataFrame()
-        except Exception:
-            df = pd.DataFrame()
-
-        _save_cache(key, df)
-        return df
-
     # ── Fear & Greed / Sentiment ─────────────────────────────────────
 
     def get_vix(

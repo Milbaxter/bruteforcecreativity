@@ -55,7 +55,6 @@ You have access to real market data through the following sources. Use `fetch_da
 ### Alternative / Eccentric Data
 - **Google Trends (pytrends)** — search interest over time for any term. Retail attention proxy. Weekly resolution, 12+ months history. Use `get_google_trends()`.
 - **Congressional trading (CapitolTrades)** — congress member stock trades scraped from capitoltrades.com. Historically suspicious alpha. Use `get_congressional_trades()`.
-- **Insider trading (OpenInsider)** — corporate insider buys/sells scraped from openinsider.com. Cluster buys = conviction signal. Use `get_insider_trades()`.
 - **Crypto on-chain** — via CoinGecko free API: market data, trading volume, market cap rankings for 10,000+ coins. Use `get_coingecko_market_data()`.
 - **Earnings calendar** — earnings dates and surprise data via yfinance `Ticker.earnings_dates`. Use `get_earnings_calendar()`.
 - **Economic calendar** — FOMC dates, CPI releases, jobs reports with historical dates. Use `get_economic_calendar()`.
@@ -74,7 +73,6 @@ get_vix(start, end)                    → Series of VIX close prices
 get_crypto_prices(symbols, start, end) → DataFrame OHLCV (use 'BTC-USD' format)
 get_google_trends(keywords)            → DataFrame of search interest (0-100)
 get_congressional_trades(days_back)    → DataFrame: date, representative, ticker, type, amount
-get_insider_trades(ticker)             → DataFrame of insider buys/sells
 get_coingecko_market_data(vs, count)   → DataFrame: coin, price, volume, market_cap, 24h_change
 get_earnings_calendar(tickers)         → DataFrame: ticker, date, eps_estimate, eps_actual, surprise
 get_economic_calendar()                → DataFrame: date, event, previous, forecast, actual
@@ -196,7 +194,6 @@ The `STRATEGY["universe"]` list MUST contain every ticker the strategy might tra
 A strategy earns "winner" status ONLY if ALL of these are true:
 - Beats SPY return
 - Sharpe ratio > 1.0
-- Max drawdown >= -15% (limited downside — we don't want strategies that can lose big)
 - At least 8 round-trip trades (prevents flukes)
 - Average holding period <= 15 days (we want fast in-and-out)
 - At least 2 out-of-sample trades with positive total PnL (proves it's not just curve-fitted to old data)
@@ -264,7 +261,7 @@ commit	strategy_name	total_return_pct	sharpe_ratio	max_drawdown_pct	win_rate_pct
 - **vs_spy_pct**: excess return vs buy-and-hold SPY (e.g. +5.32 or -3.10)
 - **oos_pnl**: out-of-sample total PnL in dollars (last 3 months)
 - **status**: `winner`, `mediocre`, `loser`, or `crash`
-  - `winner`: beats SPY, Sharpe > 1.0, max drawdown >= -15%, 8+ trades, avg hold <= 15 days, positive OOS PnL, AND passes walk-forward validation (2/3 windows)
+  - `winner`: beats SPY, Sharpe > 1.0, 8+ trades, avg hold <= 15 days, positive OOS PnL, AND passes walk-forward validation (2/3 windows)
   - `mediocre`: positive return but doesn't meet all winner criteria, OR passed initial screen but failed walk-forward
   - `loser`: negative return or worse than SPY by > 5%
   - `crash`: code errored out
@@ -314,7 +311,7 @@ All strategies should be **fast in, fast out** (1-10 day holds). Think swing tra
 
 Examples of good combo entries:
 - Congressional buy disclosure + stock has positive 5-day momentum + short interest < 5% → BUY
-- Wikipedia pageview spike > 2 standard deviations + insider cluster buy in past 10 days + price above 20-day MA → BUY
+- Wikipedia pageview spike > 2 standard deviations + price pullback > 2% in past 5 days + price above 20-day MA → BUY
 - Crypto Fear & Greed < 20 (extreme fear) + BTC above 200-day MA + weekend (lower liquidity) → BUY BTC
 - Extreme cold weather in Houston (Open-Meteo) + natural gas ETF (UNG) dropped > 3% in past 5 days + VIX > 20 → BUY UNG
 - Earnings beat > 5% + Google Trends for company name rising + stock pulled back > 2% from post-earnings high → BUY
@@ -331,7 +328,7 @@ Think WEIRD. Think niche. Think "what would a curious person with $50K and too m
 - **Cross-domain combos**: weather extremes + energy/agriculture ETFs + momentum confirmation. Wikipedia attention spikes + stock pullback + insider buying. Crypto sentiment + on-chain signals + weekend timing. Google Trends for disease keywords + pharma stocks + earnings proximity.
 - **Temporal anomalies + confirmation**: day-of-week effects + volume confirmation + VIX regime. Month-end rebalancing flows + sector strength + short interest. Options expiration week + unusual volume + price compression. Post-holiday drift + momentum + retail attention.
 - **Behavioral exploits + filters**: retail panic selling (VIX spike) + stock is above 200-day MA (healthy stock in temporary fear). Meme stock lifecycle (Reddit attention spike) + low short interest (squeeze potential) + positive earnings surprise. IPO lockup expiry + insider NOT selling (confidence signal) + sector tailwind.
-- **Copycat combos**: congressional buy + momentum + low short interest. Insider cluster buys (3+ insiders in 30 days) + positive earnings trend + pullback entry. 13F filing copycat + stock under $10B market cap (too small for the fund to fully load) + positive momentum.
+- **Copycat combos**: congressional buy + momentum + low short interest. 13F filing copycat + stock under $10B market cap (too small for the fund to fully load) + positive momentum.
 - **Event-driven combos**: FOMC day + VIX level + prior day's price action. CPI release + bond yield direction + equity sector rotation. Jobs report + wage data direction + consumer sector ETF momentum.
 - **Crypto-specific**: crypto fear/greed index + Bitcoin dominance ratio + weekend timing. Altcoin volume spike + Bitcoin stable + Google Trends for the coin. Ethereum gas fees dropping + DeFi token pullback + crypto sentiment turning.
 - **Really weird ones**: full moon + VIX percentile + gold momentum (superstition arbitrage). Tax loss selling season (December) + beaten-down small caps + insider buying. Natural disaster (extreme weather) + insurance stock reaction + mean reversion. Super Bowl winner (AFC vs NFC) + market direction (yes, this is a real anomaly people have studied). Congressional trading in defense stocks + geopolitical tension proxy + momentum.

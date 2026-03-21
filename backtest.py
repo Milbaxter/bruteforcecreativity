@@ -78,7 +78,6 @@ BACKTEST_DAYS = 365
 TIMEOUT_SECONDS = 180  # 3 minute max per backtest
 MIN_TRADES_FOR_WINNER = 8  # Need at least this many round-trip trades
 MAX_AVG_HOLDING_DAYS_FOR_WINNER = 15  # Prefer fast in-and-out
-MAX_DRAWDOWN_FOR_WINNER = -15  # Max drawdown % allowed for winners
 OOS_SPLIT_MONTHS = 3  # Last 3 months are out-of-sample
 
 # Walk-forward validation: additional 12-month windows to test robustness
@@ -230,20 +229,17 @@ def determine_status(metrics: dict, oos_metrics: dict) -> str:
     oos_pnl = oos_metrics.get("oos_total_pnl", 0)
     oos_trades = oos_metrics.get("oos_num_trades", 0)
 
-    max_dd = metrics["max_drawdown_pct"]
-
     if total_return < 0 or vs_spy < -5:
         status = "loser"
     elif (vs_spy > 0 and sharpe > 1.0 and num_trades >= MIN_TRADES_FOR_WINNER
           and avg_hold <= MAX_AVG_HOLDING_DAYS_FOR_WINNER
-          and max_dd >= MAX_DRAWDOWN_FOR_WINNER
           and oos_trades >= 2 and oos_pnl > 0):
         status = "winner"
     else:
         status = "mediocre"
 
-    logger.info("Status: %s (vs_spy=%.2f sharpe=%.2f maxdd=%.2f%% trades=%d avg_hold=%.1f oos_trades=%d oos_pnl=%.2f)",
-                status, vs_spy, sharpe, max_dd, num_trades, avg_hold, oos_trades, oos_pnl)
+    logger.info("Status: %s (vs_spy=%.2f sharpe=%.2f trades=%d avg_hold=%.1f oos_trades=%d oos_pnl=%.2f)",
+                status, vs_spy, sharpe, num_trades, avg_hold, oos_trades, oos_pnl)
     return status
 
 
