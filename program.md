@@ -105,23 +105,11 @@ Each iteration, you generate ONE novel investment strategy. A strategy must incl
 7. **Eccentricity factor**: what makes this weird? Why wouldn't a big fund do this? Why does it only work at small scale?
 8. **Repeatability**: is this a one-off or does the pattern recur? We want strategies we can run again and again, not one-time events.
 
-### What Makes a Good Strategy
-
-- **Eccentric**: crosses domains (weather + energy, congressional trades + options, Google Trends + crypto). Combines signals that institutional quants wouldn't put in the same model.
-- **Specific**: not "buy low sell high" — specific ticker selection logic, specific indicators, specific thresholds.
-- **Testable**: can be backtested with available data. No strategies that require data you can't access.
-- **Small-capital friendly**: works with $10K-$100K. No strategies that require massive positions to move markets or get fills. Ideally trades in markets or instruments too small for institutional players.
-- **Repeatable**: the pattern should recur — not a one-time event. We want strategies we can deploy month after month. A strategy that only fired once in 12 months is useless even if that one trade was amazing.
-- **Novel across the run**: don't repeat strategies. Check `results.tsv` to see what's been tried. Riff on winners but don't duplicate.
-
 ### What to Avoid
 
-- **Plain vanilla**: simple moving average crossovers, basic RSI, standard mean reversion. These are table stakes.
-- **Buy-and-hold**: we are NOT looking for "buy this and wait 6 months." Every strategy must have a clear, fast exit. Target 1-10 day holding periods.
-- **Untestable**: strategies based on data you can't actually fetch.
-- **Overfitted**: a strategy that only works on one specific stock in one specific month is worthless. It must work across the out-of-sample period too.
-- **Too few trades**: if your strategy only fires 3 times in 12 months, it's statistically meaningless no matter how good those 3 trades were. Aim for 8+ trades minimum, ideally 20+.
-- **Illegal**: no insider trading (using actual nonpublic info), no market manipulation. Congressional trade data is public record — that's fair game.
+- **Buy-and-hold** or anything with avg hold > 15 days. Fast in, fast out.
+- **Too few trades**: aim for 8+ minimum, ideally 20+.
+- **Strategies that resemble anything already in results.tsv** — even vaguely.
 
 ## Strategy Implementation
 
@@ -215,65 +203,13 @@ Each additional window must show: positive return, Sharpe > 0.5, max drawdown >=
 
 The engine logs warnings when a trade exceeds 1% of daily volume. This flags unrealistic fills — a strategy that "works" but requires buying 10% of a microcap's daily volume would not actually be executable.
 
-## Output Format
-
-After each backtest completes, the engine prints:
-
-```
----
-strategy:          Congressional Copycat Momentum
-status:            winner
-total_return_pct:  18.45
-sharpe_ratio:      1.23
-max_drawdown_pct:  -8.72
-win_rate_pct:      62.5
-num_trades:        24
-avg_holding_days:  4.2
-max_holding_days:  8
-calmar_ratio:      2.12
-profit_factor:     1.87
-vs_spy_pct:        +5.32
-spy_return_pct:    13.13
-oos_num_trades:    7
-oos_win_rate_pct:  71.4
-oos_total_pnl:     342.50
-elapsed_seconds:   12.3
-```
-
 ## Logging Results
 
-When an experiment is done, log it to `results.tsv` (tab-separated, NOT comma-separated).
+Log each experiment to `results.tsv` (tab-separated). The engine prints a structured summary after each backtest — extract metrics from there.
 
-Header and columns:
+Header: `commit	strategy_name	total_return_pct	sharpe_ratio	max_drawdown_pct	win_rate_pct	num_trades	avg_holding_days	vs_spy_pct	oos_pnl	status	description`
 
-```
-commit	strategy_name	total_return_pct	sharpe_ratio	max_drawdown_pct	win_rate_pct	num_trades	avg_holding_days	vs_spy_pct	oos_pnl	status	description
-```
-
-- **commit**: git commit hash (short, 7 chars)
-- **strategy_name**: short name
-- **total_return_pct**: e.g. 18.45
-- **sharpe_ratio**: e.g. 1.23
-- **max_drawdown_pct**: e.g. -8.72 (negative number)
-- **win_rate_pct**: e.g. 62.5
-- **num_trades**: integer (round-trip trades)
-- **avg_holding_days**: e.g. 4.2 (lower is better)
-- **vs_spy_pct**: excess return vs buy-and-hold SPY (e.g. +5.32 or -3.10)
-- **oos_pnl**: out-of-sample total PnL in dollars (last 3 months)
-- **status**: `winner`, `mediocre`, `loser`, or `crash`
-  - `winner`: beats SPY, Sharpe > 1.0, 8+ trades, avg hold <= 15 days, positive OOS PnL, AND passes walk-forward validation (2/3 windows)
-  - `mediocre`: positive return but doesn't meet all winner criteria, OR passed initial screen but failed walk-forward
-  - `loser`: negative return or worse than SPY by > 5%
-  - `crash`: code errored out
-- **description**: one-line description of the hypothesis
-
-Example:
-```
-a1b2c3d	SPY Buy and Hold	13.13	0.89	-7.20	100.0	1	365.0	0.00	0.00	mediocre	baseline buy-and-hold SPY benchmark
-b2c3d4e	Congressional Copycat	18.45	1.23	-8.72	62.5	24	4.2	+5.32	342.50	winner	copy congress trades with momentum filter
-c3d4e5f	Full Moon Longs	-2.30	-0.15	-12.40	41.2	26	14.1	-15.43	-120.00	loser	buy SPY on full moons sell on new moons
-d4e5f6g	Sentiment Vix Arb	0.00	0.00	0.00	0.0	0	0.0	0.00	0.00	crash	reddit sentiment vs VIX divergence trade (API error)
-```
+Status: `winner` (beats SPY, Sharpe>1.0, 8+ trades, avg hold ≤15d, positive OOS, passes walk-forward 2/3), `mediocre`, `loser`, or `crash`.
 
 ## The Experiment Loop
 
@@ -292,74 +228,18 @@ The experiment runs on a dedicated branch (e.g. `run/mar21`).
 9. **Move on immediately**: do not dwell on results. Do not generate variations. Do not "evolve" a winner. Just log it and generate the next completely different idea. The brute force IS the method — volume of diverse ideas, not depth on any single one.
 10. **GOTO 1**
 
-### Creativity Directives
+### Creativity Rules
 
-When generating strategies, draw from these idea wells:
+**Combine 2-3 signals from different domains per strategy.** Pattern: domain signal (WHY) + timing filter (WHEN) + risk filter (WHEN NOT). Single-signal strategies are banned.
 
-All strategies should be **fast in, fast out** (1-10 day holds). Think swing trades, not investments.
+**BANNED — do not generate any of these, they've been explored to death:**
+- ETF rotation based on momentum or relative strength (GLD/QQQ/XLE/SLV/SOXX/GDX/XLF and variants)
+- Simple pullback/dip buying on indices
+- Fear/greed or VIX regime allocation
+- Single-indicator strategies (pure momentum, pure mean reversion, pure RSI)
+- Any strategy that is "rotate N ETFs into the one with best X-day performance"
 
-#### COMBO STRATEGIES (the default — single-signal strategies are discouraged)
-
-**Every strategy should combine 2-3 uncorrelated signals into one entry condition.** Single-signal strategies (just momentum, just mean reversion, just one indicator) are too simple — they're what every quant screen already runs. The edge comes from combining signals that nobody else is combining because they come from different domains.
-
-Examples of good combo entries:
-- Congressional buy disclosure + stock has positive 5-day momentum + short interest < 5% → BUY
-- Wikipedia pageview spike > 2 standard deviations + price pullback > 2% in past 5 days + price above 20-day MA → BUY
-- Crypto Fear & Greed < 20 (extreme fear) + BTC above 200-day MA + weekend (lower liquidity) → BUY BTC
-- Extreme cold weather in Houston (Open-Meteo) + natural gas ETF (UNG) dropped > 3% in past 5 days + VIX > 20 → BUY UNG
-- Earnings beat > 5% + Google Trends for company name rising + stock pulled back > 2% from post-earnings high → BUY
-- FOMC announcement day + VIX > 25 + SPY below 10-day MA → BUY SPY (fear + event + oversold)
-
-The pattern: **domain signal (WHY to look) + momentum/mean-reversion filter (WHEN to enter) + risk filter (WHEN NOT to enter)**. Three signals, three different data sources, one entry.
-
-**If you catch yourself writing a strategy with only one entry condition, STOP and add at least one more uncorrelated signal.** Two signals minimum, three preferred.
-
-#### BANNED STRATEGIES (do NOT generate these — already explored, no more edge to find)
-
-The loop has already tested 50+ strategies. These categories are EXHAUSTED — do not generate more of them:
-- **GLD/QQQ/XLE momentum rotation** — done to death. Triple Momentum, Oil Gold Macro, Gold Silver, Precious Metals. Stop. No more gold rotation strategies. Period.
-- **Simple ETF pullback/dip buying** — Pullback Sniper, Dual Index Pullback, Multi-Asset Pullback. Covered.
-- **Fear/greed regime allocation** — Fear Greed Regime v1 and v2 exist. Move on.
-- **Single-indicator strategies** — pure momentum, pure mean reversion, pure VIX signal. Too basic.
-- **Vanilla event-driven** — FOMC drift, earnings reversal, gap down reversal. All tested, all lost.
-
-If your strategy is basically "rotate between 3 ETFs based on momentum" — STOP. That's been done. Think harder.
-
-#### Idea Wells — Think Like a Weirdo
-
-The strategies that will actually make money at small scale are the ones nobody else is running because they sound absurd, involve obscure data, or cross domains that don't belong together. **Lean into the absurdity.** If your hypothesis doesn't make a quant raise an eyebrow, it's not weird enough.
-
-**CONCRETE WEIRD HYPOTHESES TO TEST** (these are starting points, not an exhaustive list — riff on them, mutate them, invert them):
-
-1. **Wikipedia Death Spike Trade**: when a CEO/founder's Wikipedia page views spike 10x+ (health scare? scandal? death?), the stock often overreacts. Buy the dip 2 days after the spike if the company is fundamentally healthy (market cap > $10B). Use `get_wikipedia_pageviews()` + price pullback + fundamentals filter.
-
-2. **Freeze-Burn Nat Gas**: when Houston/Chicago temperatures hit extreme cold (<10°F) or extreme heat (>100°F) for 3+ consecutive days, natural gas demand spikes but UNG often hasn't moved yet. Buy UNG on weather extreme + price hasn't moved >2% yet (market hasn't priced it in). Use `get_weather_history()` + UNG price + lagged entry.
-
-3. **Crypto Capitulation Bounce**: when crypto fear/greed hits single digits (<10, "extreme fear") AND Bitcoin's 7-day RSI is below 30 AND it's a weekend (thin liquidity = bigger bounce potential). Buy BTC-USD, sell Tuesday. Use `get_crypto_fear_greed()` + price technicals + day-of-week.
-
-4. **Congressional Defense Ramp**: when congress members buy defense stocks (RTX, LMT, NOC, GD) — they often know about upcoming contracts/budgets. Buy the same stock within 5 days if momentum is positive. Use `get_congressional_trades()` filtered to defense tickers + momentum confirmation.
-
-5. **Attention Arbitrage**: when Wikipedia pageviews for a stock spike BUT Google Trends for the same term haven't spiked yet (Wikipedia leads, Google lags because Wikipedia = informed attention, Google = retail FOMO). Buy before the retail wave hits. Use `get_wikipedia_pageviews()` + `get_google_trends()` divergence + price above MA.
-
-6. **Storm Chaser**: when Open-Meteo shows a major precipitation/wind event in the Gulf Coast AND oil hasn't spiked yet, buy XLE/USO anticipating supply disruption pricing. The weather data is free and real-time — the market often takes 1-2 days to react to weather. Use `get_weather_history()` for Gulf Coast + XLE price lag.
-
-7. **CPI Surprise Fade**: CPI release dates are known. When CPI comes in hot (above forecast) markets dump same-day. But the dump reverses within 3-5 days because the Fed doesn't actually change policy that fast. Buy SPY/QQQ on CPI hot day close + sell 5 days later. Use `get_economic_calendar()` + FRED CPI data + price action.
-
-8. **Altcoin Rotation on BTC Stability**: when Bitcoin is flat (±1% for 5+ days) but altcoin volume on CoinGecko is spiking, money is rotating into alts. Buy the top-volume altcoin (ETH, SOL) via yfinance. Use `get_coingecko_market_data()` volume spike + BTC stability check.
-
-9. **Earnings Whisper Drift**: when a stock beats earnings by >5% surprise AND Wikipedia pageviews for that company are rising (sustained attention, not just one-day spike), the post-earnings drift continues for 5-10 more days. Buy day 2 after earnings, sell day 7. Use `get_earnings_calendar()` + `get_wikipedia_pageviews()` + earnings surprise filter.
-
-10. **Friday Afternoon Panic Fade**: when markets drop >1% on a Friday afternoon (fear of weekend risk), buy at close. Monday tends to gap up because the weekend risk was priced in too aggressively. Add VIX > 20 filter (only when there's actual fear). Use day-of-week + intraday price change + VIX level.
-
-11. **Weather-Agriculture Lag**: when Midwest temperatures are extreme (drought conditions or early frost from Open-Meteo) AND agriculture ETFs (WEAT, CORN) haven't moved yet, buy anticipating supply concern pricing. Weather data leads commodity prices by days. Use `get_weather_history()` for Iowa/Illinois + WEAT/CORN price.
-
-12. **Crypto-Equity Divergence**: when BTC-USD rallies >5% in a week but crypto-adjacent equities (COIN, MARA, MSTR) lag behind by >3%, buy the equities. They catch up within 3-5 days. Use crypto price + equity price divergence + volume confirmation.
-
-**Inversion trick**: if a hypothesis loses money, try the EXACT OPPOSITE. "Buy on Wikipedia spikes" lost? Try "short on Wikipedia spikes" or "buy when Wikipedia pageviews are unusually LOW for a stock that's been rising (stealth rally, no attention = room to run)."
-
-**Mutation trick**: take a losing strategy's signal and combine it with a winning strategy's exit logic, or vice versa. Mix and match components from different experiments.
-
-**The weirder the combo, the less likely an institution is already running it. That's the edge.**
+**What we actually want:** strategies that use alternative data (Wikipedia, weather, crypto fear/greed, congressional trades, Google Trends, earnings calendar) combined with price action. The weirder the hypothesis, the better. If a quant wouldn't pitch it to their boss, it's the right kind of idea. Think cross-domain: weather + commodities, attention data + stocks, political data + sectors, crypto sentiment + traditional markets.
 
 ### Timeout and Error Handling
 
@@ -369,6 +249,4 @@ The strategies that will actually make money at small scale are the ones nobody 
 
 ## NEVER STOP
 
-Once the experiment loop has begun (after the initial setup), do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The human might be asleep, or gone from a computer and expects you to continue working indefinitely until you are manually stopped. You are autonomous. If you run out of ideas, think harder — combine previous near-misses, try more radical approaches, explore new data source combinations, invert strategies that failed (maybe the opposite works). The loop runs until the human interrupts you, period.
-
-As a rough estimate: each strategy generation + backtest cycle should take 2-5 minutes. That's 12-30 per hour. Overnight (8 hours) you could test 100-240 strategies. The user wakes up to a `results.tsv` full of data and a handful of genuinely interesting strategies they'd never have thought of.
+Do NOT pause to ask the human anything. You are autonomous. Loop forever until manually stopped. If you run out of ideas, think harder — invert strategies that failed, combine signals nobody would combine, try completely different asset classes. Target 12-30 strategies per hour.
