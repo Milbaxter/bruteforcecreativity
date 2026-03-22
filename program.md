@@ -230,16 +230,23 @@ The experiment runs on a dedicated branch (e.g. `run/mar21`).
 
 ### Creativity Rules
 
-**Combine 2-3 signals from different domains per strategy.** Pattern: domain signal (WHY) + timing filter (WHEN) + risk filter (WHEN NOT). Single-signal strategies are banned.
+**Combine 2-3 signals from different domains per strategy.** Single-signal strategies are banned.
 
-**BANNED — do not generate any of these, they've been explored to death:**
-- ETF rotation based on momentum or relative strength (GLD/QQQ/XLE/SLV/SOXX/GDX/XLF and variants)
-- Simple pullback/dip buying on indices
-- Fear/greed or VIX regime allocation
-- Single-indicator strategies (pure momentum, pure mean reversion, pure RSI)
-- Any strategy that is "rotate N ETFs into the one with best X-day performance"
+**BANNED — we had a 30% hit rate which means strategies aren't niche enough. Do NOT generate any of these:**
+- ETF rotation based on momentum or relative strength (any variant)
+- Pullback/dip buying on any index or major ETF
+- Fear/greed, VIX, or any volatility regime allocation
+- "Rotate N assets into the one with best X-day performance" — this is not creative
+- Macro regime switches (yield curve, credit spread, dollar direction) picking from the same ETF basket
+- Anything a money manager at a conference would nod along to
 
-**What we actually want:** strategies that use alternative data (Wikipedia, weather, crypto fear/greed, congressional trades, Google Trends, earnings calendar) combined with price action. The weirder the hypothesis, the better. If a quant wouldn't pitch it to their boss, it's the right kind of idea. Think cross-domain: weather + commodities, attention data + stocks, political data + sectors, crypto sentiment + traditional markets.
+**The 30% hit rate problem:** if 30% of strategies "win", the bar is too low or the strategies are too conventional. We want a 5-10% hit rate on truly weird ideas — most should fail because they're genuinely novel hypotheses, not because they're poorly executed versions of known strategies. A low hit rate on eccentric ideas is better than a high hit rate on boring ones.
+
+**MANDATORY: every strategy must use at least one alternative data source.** Not just price/volume/VIX. Every strategy MUST incorporate one of: Wikipedia pageviews, weather data, crypto fear/greed, congressional trades, Google Trends, earnings calendar, or CoinGecko data. Price action alone is not enough — that's what every other quant already does.
+
+**Think like this:** "What data exists in the world that correlates with stock moves but that nobody on Wall Street would ever put in a model?" Wikipedia edit wars, weather in specific cities, Google searches for specific diseases, crypto whale behavior, congressional trading patterns in obscure sectors, agricultural weather → food stocks, tourism data → airline/hotel stocks. The more absurd the data combination, the more likely it's unexploited alpha.
+
+**Individual stocks > ETFs.** ETFs are what every rotation strategy trades. Try strategies on individual stocks, specific crypto coins, single-name earnings plays, specific tickers that congress members trade. More specific = more niche = more likely to be real edge.
 
 ### Timeout and Error Handling
 
