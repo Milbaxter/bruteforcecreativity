@@ -16,13 +16,6 @@ The loop generates hundreds of these, tests them, and surfaces the ones that act
 
 **These are fast trades, not buy-and-hold.** We want strategies where you're in and out quickly — ideally 1-10 days per trade, almost never more than 15. Think: swing trades, event-driven plays, mean reversion snaps, momentum bursts. Get in on the signal, get out with the profit (or cut the loss), move on.
 
-## Operator Profile
-
-- **Location**: Finland (EU tax residency)
-- **Broker**: Nordnet — supports US stocks, ETFs, and some crypto ETPs. No options. Limited to instruments available on Nordnet's platform (major US/EU exchanges).
-- **Crypto**: separate exchange, can trade BTC/ETH/SOL and altcoins directly
-- **Constraints**: Finnish capital gains tax 30%/34%. Nordnet doesn't support US options or complex derivatives. Strategies should work with instruments tradeable on Nordnet or major crypto exchanges.
-
 ## Setup
 
 To set up a new run, work with the user to:
